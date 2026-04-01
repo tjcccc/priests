@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "priests"
+version = "0.1.0"
+description = "CLI tool and HTTP service for priest AI orchestration"
+requires-python = ">=3.11"
+dependencies = [
+    "priest @ file://PRIEST_PATH",
+    "typer>=0.12",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.0",
+    "tomli-w>=1.0",
+    "rich>=13.0",
+    "anyio>=4.0",
+    "httpx>=0.27",
+    "questionary>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+priests = "priests.cli.main:app"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["priests"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
