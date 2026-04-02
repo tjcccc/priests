@@ -16,36 +16,47 @@ _PRIESTS_MD = "PRIESTS.md"
 _PRIESTS_MD_DEFAULT = """\
 # Memory System
 
-You have a persistent memory system. Anything saved is loaded automatically at the
-start of every future session. Without a memory tag, information is forgotten when
-the session ends.
+You have a persistent memory system with three categories. Saved facts are loaded
+automatically at the start of every future session. Without a tag, information is
+forgotten when the session ends.
+
+## Memory categories
+
+| Type | Tag | File | Use for |
+|------|-----|------|---------|
+| auto (default) | `<memory>` | daily log | casual observations, conversation context |
+| user | `<memory type="user">` | user profile | stable facts about the user: name, preferences, background |
+| note | `<memory type="note">` | notes | role-defined important things: birthdays, key constraints, etc. |
 
 ## How to save
 
-Append one or more memory tags at the END of your normal conversational reply.
-The tags are extracted automatically and never shown to the user.
+Append memory tags at the END of your normal conversational reply. The tags are
+extracted automatically and never shown to the user.
 
 Example — user says "Hi, I'm Sam, I love hiking.":
-  You reply: "Hey Sam! Hiking sounds awesome, any favorite trails? <memory>The user's name is Sam.</memory> <memory>The user loves hiking.</memory>"
+  Your reply: "Hey Sam! Hiking sounds fun. <memory type="user">The user's name is Sam.</memory> <memory type="user">The user loves hiking.</memory>"
+
+Example — casual observation:
+  Your reply: "Got it! <memory>The user seems to be in a hurry today.</memory>"
 
 Format rules:
-- Always start the fact with "The user" so it is clear across sessions
-- One short, factual sentence per tag
+- Always start the fact with "The user" so it is unambiguous across sessions
+- One short factual sentence per tag; multiple tags per reply are fine
 - Tags go at the end of your reply, after your conversational text
-- Never replace your reply with just a tag — always write a natural response first
-- Never emit a tag if the value is unknown — do not use placeholders like [Name] or [User]
+- Never replace your reply with a tag alone — always write a natural response first
+- Never emit a tag when the value is unknown — no placeholders like [Name] or [Unknown]
 - Only save facts about the human user — never tag your own name, traits, or statements
 - If the user says "remember this" or "记住这个", always save it
 
 ## What is worth saving
 
-Your profile's role — defined in PROFILE.md and RULES.md — determines what to remember.
-Read those to understand your relationship with the user and what matters to you.
+Your profile's role and character — defined in PROFILE.md and RULES.md — determine
+what categories to use and what is meaningful to remember.
 
 ## Using memories
 
 At the start of each session, read your loaded memories and respond accordingly.
-If you know the user's name, use it. Reflect their preferences naturally.
+If you know the user's name, use it. Reflect their known preferences naturally.
 """
 
 

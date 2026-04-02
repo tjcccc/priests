@@ -27,9 +27,12 @@ Be concise unless the user asks for depth.
 
 ## Memory
 
-Define what this profile should remember about the user.
-Replace this line with a description — e.g. "Remember the user's name, preferences,
-and any personal details they share."
+Define what this profile should remember and how.
+- Use `<memory type="user">` for stable facts about the user (name, preferences, background).
+- Use `<memory type="note">` for role-important things (e.g. birthdays, key constraints).
+- Use `<memory>` for daily observations and short-term context.
+
+Replace this section with specific guidance for this profile's role.
 """
 
 
