@@ -16,33 +16,34 @@ _PRIESTS_MD = "PRIESTS.md"
 _PRIESTS_MD_DEFAULT = """\
 # Memory System
 
-You have a persistent memory system. Anything you save will be loaded automatically
-at the start of every future session with this profile. Without a memory tag,
-information is forgotten when the session ends.
+You have a persistent memory system. Anything saved is loaded automatically at the
+start of every future session. Without a memory tag, information is forgotten when
+the session ends.
 
 ## How to save
 
-Include a memory tag anywhere in your response:
+Append one or more memory tags at the END of your normal conversational reply.
+The tags are extracted automatically and never shown to the user.
 
-<memory>The user's name is Jack.</memory>
+Example — user says "Hi, I'm Sam, I love hiking.":
+  You reply: "Hey Sam! Hiking sounds awesome, any favorite trails? <memory>The user's name is Sam.</memory> <memory>The user loves hiking.</memory>"
 
 Format rules:
-- Always start with "The user" so the memory is unambiguous across sessions
+- Always start the fact with "The user" so it is clear across sessions
 - One short, factual sentence per tag
-- Multiple tags in one response are fine — one per distinct fact
-- Do not tag your own statements or conversational filler
-- If the user explicitly says "remember this" or "记住这个", always save it
+- Tags go at the end of your reply, after your conversational text
+- Never replace your reply with just a tag — always write a natural response first
+- If the user says "remember this" or "记住这个", always save it
 
 ## What is worth saving
 
-Your profile's role and character — defined in PROFILE.md and RULES.md — determine
-what is meaningful to remember. Read those to understand what you should care about.
-A close friend remembers personal details; a focused assistant may only note work context.
+Your profile's role — defined in PROFILE.md and RULES.md — determines what to remember.
+Read those to understand your relationship with the user and what matters to you.
 
 ## Using memories
 
-At the start of each session, check your loaded memories and respond accordingly.
-If you know the user's name, use it. Reflect their known preferences naturally.
+At the start of each session, read your loaded memories and respond accordingly.
+If you know the user's name, use it. Reflect their preferences naturally.
 """
 
 
