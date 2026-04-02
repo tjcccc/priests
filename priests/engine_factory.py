@@ -11,17 +11,52 @@ from priest.session.sqlite_store import SqliteSessionStore
 from priests.config.model import AppConfig
 
 
-def _bootstrap_profiles(profiles_root: Path) -> None:
-    """Scaffold profiles_root and the default profile on first run."""
-    default_dir = profiles_root / "default"
-    if default_dir.exists():
-        return
+_PRIESTS_MD = "PRIESTS.md"
 
-    default_dir.mkdir(parents=True, exist_ok=True)
-    (default_dir / "PROFILE.md").write_text(IDENTITY)
-    (default_dir / "RULES.md").write_text(RULES)
-    (default_dir / "CUSTOM.md").write_text("")
-    (default_dir / "memories").mkdir()
+_PRIESTS_MD_DEFAULT = """\
+# Memory Guide
+
+You have a persistent memory system. Files in your profile's `memories/` folder are
+loaded automatically at the start of every session.
+
+When you learn something meaningful about the user — their name, preferences, or
+important context — OR when the user explicitly asks you to remember something
+(e.g. "remember this", "记住这个", "please save this"), include a memory tag
+anywhere in your response:
+
+<memory>One concise fact. Max 2 sentences. Write in third person about the user.</memory>
+
+Guidelines:
+- Emit a tag only for genuinely useful, lasting information
+- Keep content brief and factual; avoid conversational phrasing
+- One tag per distinct fact is fine; multiple tags in one response are allowed
+- Never tag trivial or transient details
+"""
+
+
+def _bootstrap_profiles(profiles_root: Path) -> None:
+    """Scaffold profiles_root, default profile, and PRIESTS.md on first run."""
+    default_dir = profiles_root / "default"
+    if not default_dir.exists():
+        default_dir.mkdir(parents=True, exist_ok=True)
+        (default_dir / "PROFILE.md").write_text(IDENTITY)
+        (default_dir / "RULES.md").write_text(RULES)
+        (default_dir / "CUSTOM.md").write_text("")
+        (default_dir / "memories").mkdir()
+
+    # Bootstrap PRIESTS.md unconditionally — handles v0.1 → v0.2 upgrade.
+    guide_path = profiles_root.parent / _PRIESTS_MD
+    if not guide_path.exists():
+        guide_path.write_text(_PRIESTS_MD_DEFAULT)
+
+
+def load_global_guide(config: AppConfig) -> str | None:
+    """Return ~/.priests/PRIESTS.md contents, or None if missing or empty."""
+    path = config.paths.profiles_dir.expanduser().parent / _PRIESTS_MD
+    if path.exists():
+        text = path.read_text(encoding="utf-8").strip()
+        return text if text else None
+    return None
 
 
 class NotInitializedError(RuntimeError):

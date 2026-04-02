@@ -40,10 +40,16 @@ async def _run_single(
     no_think: bool,
 ) -> None:
     from priest import PriestRequest, SessionRef
-    from priests.engine_factory import build_engine
+    from priests.engine_factory import build_engine, load_global_guide
+    from priests.memory.extractor import extract_memories, strip_memory_tags, write_memories, trim_memories
 
     engine, store = await build_engine(config)
     priest_config = _build_priest_config(config, provider, model, no_think)
+
+    guide = load_global_guide(config)
+    system_context = ["Running inside priests CLI."]
+    if guide:
+        system_context = [guide, *system_context]
 
     session_ref = None
     if session_id:
@@ -54,7 +60,7 @@ async def _run_single(
         profile=profile,
         prompt=prompt,
         session=session_ref,
-        system_context=["Running inside priests CLI."],
+        system_context=system_context,
     )
 
     try:
@@ -68,7 +74,13 @@ async def _run_single(
         err_console.print(f"[red]Error:[/red] {response.error.code}: {response.error.message}")
         raise typer.Exit(1)
 
-    console.print(response.text)
+    facts = extract_memories(response.text or "")
+    if facts:
+        memories_dir = config.paths.profiles_dir.expanduser() / profile / "memories"
+        write_memories(memories_dir, facts)
+        trim_memories(memories_dir, config.memory.limit)
+
+    console.print(strip_memory_tags(response.text or ""))
     if response.execution.latency_ms is not None:
         console.print(f"[dim]({response.execution.latency_ms}ms)[/dim]")
 
@@ -94,7 +106,8 @@ async def _run_chat(
     import uuid
 
     from priest import PriestConfig, PriestRequest, SessionRef
-    from priests.engine_factory import build_engine
+    from priests.engine_factory import build_engine, load_global_guide
+    from priests.memory.extractor import extract_memories, strip_memory_tags, write_memories, trim_memories
 
     try:
         engine, store = await build_engine(config)
@@ -104,6 +117,12 @@ async def _run_chat(
 
     priest_config = _build_priest_config(config, provider, model, no_think)
     think = not no_think and config.default.think
+
+    guide = load_global_guide(config)
+    system_context_base = ["Running inside priests CLI."]
+    if guide:
+        system_context_base = [guide, *system_context_base]
+    memories_dir = config.paths.profiles_dir.expanduser() / profile / "memories"
 
     sid = session_id or str(uuid.uuid4())
     session_ref = SessionRef(id=sid, create_if_missing=True)
@@ -164,7 +183,7 @@ async def _run_chat(
                 profile=profile,
                 prompt=raw,
                 session=session_ref,
-                system_context=["Running inside priests CLI."],
+                system_context=system_context_base,
             )
 
             response = await engine.run(request)
@@ -173,7 +192,15 @@ async def _run_chat(
                 err_console.print(f"[red]Error:[/red] {response.error.code}: {response.error.message}")
                 continue
 
-            console.print(f"[bold]ai>[/bold] {escape(response.text or '')}\n")
+            facts = extract_memories(response.text or "")
+            if facts:
+                write_memories(memories_dir, facts)
+                trim_memories(memories_dir, config.memory.limit)
+
+            display = strip_memory_tags(response.text or "")
+            console.print(f"[bold]ai>[/bold] {escape(display)}\n")
+            if facts:
+                console.print("[dim][memory saved][/dim]\n")
 
 
 @run_app.callback(invoke_without_command=True)

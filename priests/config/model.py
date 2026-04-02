@@ -42,8 +42,13 @@ class ProvidersConfig(BaseModel):
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
 
 
+class MemoryConfig(BaseModel):
+    limit: int = 50  # max auto_*.md files to keep per profile; 0 = unlimited
+
+
 class AppConfig(BaseModel):
     default: DefaultsConfig = Field(default_factory=DefaultsConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
     service: ServiceConfig = Field(default_factory=ServiceConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
