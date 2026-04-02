@@ -5,11 +5,17 @@ from datetime import datetime
 from pathlib import Path
 
 _TAG_RE = re.compile(r"<memory>(.*?)</memory>", re.DOTALL | re.IGNORECASE)
+_PLACEHOLDER_RE = re.compile(r"\[[^\]]+\]")  # matches [Unknown], [Name], [N/A], etc.
 
 
 def extract_memories(text: str) -> list[str]:
-    """Return memory strings found in the model's response."""
-    return [m.strip() for m in _TAG_RE.findall(text) if m.strip()]
+    """Return memory strings found in the model's response, excluding placeholders."""
+    results = []
+    for m in _TAG_RE.findall(text):
+        fact = m.strip()
+        if fact and not _PLACEHOLDER_RE.search(fact):
+            results.append(fact)
+    return results
 
 
 def strip_memory_tags(text: str) -> str:
