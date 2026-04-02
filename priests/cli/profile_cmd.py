@@ -24,6 +24,12 @@ _RULES_MD_STUB = """\
 
 Be honest. Do not make things up.
 Be concise unless the user asks for depth.
+
+## Memory
+
+Define what this profile should remember about the user.
+Replace this line with a description — e.g. "Remember the user's name, preferences,
+and any personal details they share."
 """
 
 

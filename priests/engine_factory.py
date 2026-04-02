@@ -16,35 +16,33 @@ _PRIESTS_MD = "PRIESTS.md"
 _PRIESTS_MD_DEFAULT = """\
 # Memory System
 
-You have a persistent memory system. Files in your profile's `memories/` folder are
-loaded at the start of every session. Without a memory tag, information is forgotten
-when the session ends.
+You have a persistent memory system. Anything you save will be loaded automatically
+at the start of every future session with this profile. Without a memory tag,
+information is forgotten when the session ends.
 
-## When to save
-
-ALWAYS emit a memory tag when the user:
-- Shares their name ("I'm Jack", "call me Sarah")
-- States a preference, habit, or fact about themselves
-- Explicitly asks you to remember ("remember this", "记住这个", "please save this")
-
-When in doubt, save it. It is better to save too much than to forget.
-
-## Format
+## How to save
 
 Include a memory tag anywhere in your response:
 
 <memory>The user's name is Jack.</memory>
 
-Rules:
-- ALWAYS start with "The user" so the memory is unambiguous across sessions
+Format rules:
+- Always start with "The user" so the memory is unambiguous across sessions
 - One short, factual sentence per tag
 - Multiple tags in one response are fine — one per distinct fact
 - Do not tag your own statements or conversational filler
+- If the user explicitly says "remember this" or "记住这个", always save it
+
+## What is worth saving
+
+Your profile's role and character — defined in PROFILE.md and RULES.md — determine
+what is meaningful to remember. Read those to understand what you should care about.
+A close friend remembers personal details; a focused assistant may only note work context.
 
 ## Using memories
 
-At the start of a session, check your loaded memories and greet the user accordingly.
-If you know their name, use it. If you know their preferences, reflect them naturally.
+At the start of each session, check your loaded memories and respond accordingly.
+If you know the user's name, use it. Reflect their known preferences naturally.
 """
 
 
