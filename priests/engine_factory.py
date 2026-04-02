@@ -14,23 +14,37 @@ from priests.config.model import AppConfig
 _PRIESTS_MD = "PRIESTS.md"
 
 _PRIESTS_MD_DEFAULT = """\
-# Memory Guide
+# Memory System
 
 You have a persistent memory system. Files in your profile's `memories/` folder are
-loaded automatically at the start of every session.
+loaded at the start of every session. Without a memory tag, information is forgotten
+when the session ends.
 
-When you learn something meaningful about the user — their name, preferences, or
-important context — OR when the user explicitly asks you to remember something
-(e.g. "remember this", "记住这个", "please save this"), include a memory tag
-anywhere in your response:
+## When to save
 
-<memory>One concise fact. Max 2 sentences. Write in third person about the user.</memory>
+ALWAYS emit a memory tag when the user:
+- Shares their name ("I'm Jack", "call me Sarah")
+- States a preference, habit, or fact about themselves
+- Explicitly asks you to remember ("remember this", "记住这个", "please save this")
 
-Guidelines:
-- Emit a tag only for genuinely useful, lasting information
-- Keep content brief and factual; avoid conversational phrasing
-- One tag per distinct fact is fine; multiple tags in one response are allowed
-- Never tag trivial or transient details
+When in doubt, save it. It is better to save too much than to forget.
+
+## Format
+
+Include a memory tag anywhere in your response:
+
+<memory>The user's name is Jack.</memory>
+
+Rules:
+- ALWAYS start with "The user" so the memory is unambiguous across sessions
+- One short, factual sentence per tag
+- Multiple tags in one response are fine — one per distinct fact
+- Do not tag your own statements or conversational filler
+
+## Using memories
+
+At the start of a session, check your loaded memories and greet the user accordingly.
+If you know their name, use it. If you know their preferences, reflect them naturally.
 """
 
 

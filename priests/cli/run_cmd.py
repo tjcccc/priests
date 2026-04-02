@@ -200,7 +200,7 @@ async def _run_chat(
             display = strip_memory_tags(response.text or "")
             console.print(f"[bold]ai>[/bold] {escape(display)}\n")
             if facts:
-                console.print("[dim][memory saved][/dim]\n")
+                console.print("[dim][memory saved][/dim]")
 
 
 @run_app.callback(invoke_without_command=True)
