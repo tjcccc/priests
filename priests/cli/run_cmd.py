@@ -41,7 +41,7 @@ async def _run_single(
 ) -> None:
     from priest import PriestRequest, SessionRef
     from priests.engine_factory import build_engine, load_global_guide
-    from priests.memory.extractor import extract_memories, strip_memory_tags, write_memories, trim_memories
+    from priests.memory.extractor import clean_last_turn, extract_memories, strip_memory_tags, write_memories, trim_memories
 
     engine, store = await build_engine(config)
     priest_config = _build_priest_config(config, provider, model, no_think)
@@ -66,6 +66,8 @@ async def _run_single(
     try:
         async with store:
             response = await engine.run(request)
+            if response.session:
+                await clean_last_turn(store, response.session.id)
     except NotInitializedError as e:
         err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
@@ -107,7 +109,7 @@ async def _run_chat(
 
     from priest import PriestConfig, PriestRequest, SessionRef
     from priests.engine_factory import build_engine, load_global_guide
-    from priests.memory.extractor import extract_memories, strip_memory_tags, write_memories, trim_memories
+    from priests.memory.extractor import clean_last_turn, extract_memories, strip_memory_tags, write_memories, trim_memories
 
     try:
         engine, store = await build_engine(config)
@@ -191,6 +193,8 @@ async def _run_chat(
             if not response.ok:
                 err_console.print(f"[red]Error:[/red] {response.error.code}: {response.error.message}")
                 continue
+
+            await clean_last_turn(store, response.session.id) if response.session else None
 
             facts = extract_memories(response.text or "")
             if facts:

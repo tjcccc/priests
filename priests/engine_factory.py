@@ -34,6 +34,7 @@ Format rules:
 - Tags go at the end of your reply, after your conversational text
 - Never replace your reply with just a tag — always write a natural response first
 - Never emit a tag if the value is unknown — do not use placeholders like [Name] or [User]
+- Only save facts about the human user — never tag your own name, traits, or statements
 - If the user says "remember this" or "记住这个", always save it
 
 ## What is worth saving
