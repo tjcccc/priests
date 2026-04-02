@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import dataclasses
 import re
-from datetime import datetime
 from pathlib import Path
 
 _TAG_RE = re.compile(r"<memory>(.*?)</memory>", re.DOTALL | re.IGNORECASE)
 _PLACEHOLDER_RE = re.compile(r"\[[^\]]+\]")  # matches [Unknown], [Name], [N/A], etc.
+
+AUTO_MEMORIES_FILE = "auto_memories.md"
 
 
 def extract_memories(text: str) -> list[str]:
@@ -23,40 +25,43 @@ def strip_memory_tags(text: str) -> str:
     return _TAG_RE.sub("", text).strip()
 
 
-def _already_saved(memories_dir: Path, fact: str) -> bool:
-    """Return True if an identical fact already exists in memories_dir."""
-    normalized = fact.lower().strip()
-    for f in memories_dir.glob("*.md"):
-        if f.read_text(encoding="utf-8").lower().strip() == normalized:
-            return True
-    return False
+def _load_existing(memories_dir: Path) -> list[str]:
+    """Return current lines from auto_memories.md, or empty list."""
+    path = memories_dir / AUTO_MEMORIES_FILE
+    if not path.exists():
+        return []
+    return [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def write_memories(memories_dir: Path, facts: list[str]) -> list[Path]:
-    """Write each fact to a timestamped .md file in memories_dir, skipping duplicates."""
+def write_memories(memories_dir: Path, facts: list[str]) -> list[str]:
+    """Append new facts to auto_memories.md, skipping duplicates. Returns newly written facts."""
     memories_dir.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = []
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    for i, fact in enumerate(facts):
-        if _already_saved(memories_dir, fact):
-            continue
-        path = memories_dir / f"auto_{ts}_{i:02d}.md"
-        path.write_text(fact, encoding="utf-8")
-        written.append(path)
-    return written
+    existing = _load_existing(memories_dir)
+    existing_lower = {line.lower().strip() for line in existing}
+
+    new_facts = [f for f in facts if f.lower().strip() not in existing_lower]
+    if not new_facts:
+        return []
+
+    path = memories_dir / AUTO_MEMORIES_FILE
+    with path.open("a", encoding="utf-8") as fh:
+        for fact in new_facts:
+            fh.write(fact + "\n")
+
+    return new_facts
 
 
 def trim_memories(memories_dir: Path, limit: int) -> None:
-    """Delete oldest auto_*.md files beyond limit. User-created files are never touched."""
+    """Keep only the most recent `limit` lines in auto_memories.md. 0 = unlimited."""
     if limit <= 0:
         return
-    files = sorted(memories_dir.glob("auto_*.md"))  # oldest first (timestamp filename sort)
-    excess = len(files) - limit
-    for f in files[:excess]:
-        f.unlink(missing_ok=True)
+    path = memories_dir / AUTO_MEMORIES_FILE
+    if not path.exists():
+        return
+    lines = _load_existing(memories_dir)
+    if len(lines) > limit:
+        path.write_text("\n".join(lines[-limit:]) + "\n", encoding="utf-8")
 
-
-import dataclasses
 
 async def clean_last_turn(store, session_id: str) -> None:
     """Strip memory tags from the last assistant turn so they don't leak into session history."""
