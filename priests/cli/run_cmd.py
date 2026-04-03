@@ -38,13 +38,19 @@ async def _run_single(
     profile: str,
     session_id: str | None,
     no_think: bool,
+    memories: bool,
 ) -> None:
     from priest import PriestRequest, SessionRef
     from priests.engine_factory import build_engine, load_global_guide
     from priests.memory.extractor import clean_last_turn, extract_memories, strip_memory_tags, write_memories, trim_memories
+    from priests.profile.config import load_profile_config
 
     engine, store = await build_engine(config)
     priest_config = _build_priest_config(config, provider, model, no_think)
+
+    profile_cfg = load_profile_config(config.paths.profiles_dir, profile)
+    memories_on = memories and profile_cfg.memories
+    mem_limit = profile_cfg.memories_limit if profile_cfg.memories_limit is not None else config.memory.limit
 
     guide = load_global_guide(config)
     system_context = ["Running inside priests CLI."]
@@ -76,11 +82,11 @@ async def _run_single(
         err_console.print(f"[red]Error:[/red] {response.error.code}: {response.error.message}")
         raise typer.Exit(1)
 
-    facts = extract_memories(response.text or "")
+    facts = extract_memories(response.text or "") if memories_on else []
     if facts:
         memories_dir = config.paths.profiles_dir.expanduser() / profile / "memories"
         write_memories(memories_dir, facts)
-        trim_memories(memories_dir, config.memory.limit)
+        trim_memories(memories_dir, mem_limit)
 
     console.print(strip_memory_tags(response.text or ""))
     if response.execution.latency_ms is not None:
@@ -104,12 +110,14 @@ async def _run_chat(
     profile: str,
     session_id: str | None,
     no_think: bool,
+    memories: bool,
 ) -> None:
     import uuid
 
     from priest import PriestConfig, PriestRequest, SessionRef
     from priests.engine_factory import build_engine, load_global_guide
     from priests.memory.extractor import clean_last_turn, extract_memories, strip_memory_tags, write_memories, trim_memories
+    from priests.profile.config import load_profile_config
 
     try:
         engine, store = await build_engine(config)
@@ -119,6 +127,10 @@ async def _run_chat(
 
     priest_config = _build_priest_config(config, provider, model, no_think)
     think = not no_think and config.default.think
+
+    profile_cfg = load_profile_config(config.paths.profiles_dir, profile)
+    memories_on = memories and profile_cfg.memories
+    mem_limit = profile_cfg.memories_limit if profile_cfg.memories_limit is not None else config.memory.limit
 
     guide = load_global_guide(config)
     system_context_base = ["Running inside priests CLI."]
@@ -135,7 +147,7 @@ async def _run_chat(
     async with store:
         while True:
             try:
-                raw = input("you> ").strip()
+                raw = input("user > ").strip()
             except (EOFError, KeyboardInterrupt):
                 console.print("\n[dim]Bye.[/dim]")
                 break
@@ -196,13 +208,13 @@ async def _run_chat(
 
             await clean_last_turn(store, response.session.id) if response.session else None
 
-            facts = extract_memories(response.text or "")
+            facts = extract_memories(response.text or "") if memories_on else []
             if facts:
                 write_memories(memories_dir, facts)
-                trim_memories(memories_dir, config.memory.limit)
+                trim_memories(memories_dir, mem_limit)
 
             display = strip_memory_tags(response.text or "")
-            console.print(f"[bold]ai>[/bold] {escape(display)}\n")
+            console.print(f"[bold]{profile} >[/bold] {escape(display)}\n")
             if facts:
                 console.print("[dim][memory saved][/dim]")
 
@@ -216,6 +228,7 @@ def run(
     profile: Annotated[str, typer.Option("--profile", help="Profile name.")] = "default",
     session: Annotated[str | None, typer.Option("--session", "-s", help="Session ID or name.")] = None,
     no_think: Annotated[bool, typer.Option("--no-think", help="Disable model thinking (Qwen3/Ollama).")] = False,
+    memories: Annotated[bool, typer.Option("--memories/--no-memories", help="Enable or disable memory loading and saving.")] = True,
     config_file: Annotated[Path | None, typer.Option("--config", help="Path to priests.toml.")] = None,
 ) -> None:
     """Run a single prompt or enter interactive chat (if PROMPT is omitted)."""
@@ -223,13 +236,13 @@ def run(
     config = load_config(config_file)
 
     if resolved_prompt is None and sys.stdin.isatty():
-        anyio.run(_run_chat, config, provider, model, profile, session, no_think)
+        anyio.run(_run_chat, config, provider, model, profile, session, no_think, memories)
     elif resolved_prompt is None:
         # Piped input
         resolved_prompt = sys.stdin.read().strip()
         if not resolved_prompt:
             err_console.print("[red]No prompt provided.[/red]")
             raise typer.Exit(1)
-        anyio.run(_run_single, resolved_prompt, config, provider, model, profile, session, no_think)
+        anyio.run(_run_single, resolved_prompt, config, provider, model, profile, session, no_think, memories)
     else:
-        anyio.run(_run_single, resolved_prompt, config, provider, model, profile, session, no_think)
+        anyio.run(_run_single, resolved_prompt, config, provider, model, profile, session, no_think, memories)

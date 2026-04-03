@@ -8,6 +8,7 @@ from priest import PriestConfig, PriestRequest, PriestResponse, SessionRef
 from priests.config.model import AppConfig
 from priests.engine_factory import load_global_guide
 from priests.memory.extractor import clean_last_turn, extract_memories, strip_memory_tags, write_memories, trim_memories
+from priests.profile.config import load_profile_config
 from priests.service.schemas import RunRequest
 
 router = APIRouter()
@@ -48,21 +49,31 @@ def _build_priest_request(body: RunRequest, config: AppConfig, guide: str | None
     )
 
 
-async def _apply_memory(response: PriestResponse, body: RunRequest, config: AppConfig, store) -> PriestResponse:
+async def _apply_memory(
+    response: PriestResponse,
+    body: RunRequest,
+    config: AppConfig,
+    store,
+    memories: bool = True,
+) -> PriestResponse:
     """Strip tags from session store, extract memories, write to disk, strip tags from response text."""
     if response.session:
         await clean_last_turn(store, response.session.id)
-    facts = extract_memories(response.text or "")
-    if facts:
-        memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
-        write_memories(memories_dir, facts)
-        trim_memories(memories_dir, config.memory.limit)
+    if memories:
+        profile_cfg = load_profile_config(config.paths.profiles_dir, body.profile)
+        if profile_cfg.memories:
+            facts = extract_memories(response.text or "")
+            if facts:
+                mem_limit = profile_cfg.memories_limit if profile_cfg.memories_limit is not None else config.memory.limit
+                memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
+                write_memories(memories_dir, facts)
+                trim_memories(memories_dir, mem_limit)
     return response.model_copy(update={"text": strip_memory_tags(response.text or "")})
 
 
 @router.post("/run", response_model=PriestResponse)
-async def run_once(body: RunRequest, request: Request) -> PriestResponse:
-    """Single run — no session required."""
+async def run_once(body: RunRequest, request: Request, memories: bool = True) -> PriestResponse:
+    """Single run — no session required. Pass ?memories=false to disable memory loading and saving."""
     engine = request.app.state.engine
     config: AppConfig = request.app.state.config
     guide = load_global_guide(config)
@@ -71,12 +82,12 @@ async def run_once(body: RunRequest, request: Request) -> PriestResponse:
     response = await engine.run(priest_request)
     if not response.ok:
         raise HTTPException(status_code=500, detail={"code": response.error.code, "message": response.error.message})
-    return await _apply_memory(response, body, config, store)
+    return await _apply_memory(response, body, config, store, memories=memories)
 
 
 @router.post("/chat", response_model=PriestResponse)
-async def chat(body: RunRequest, request: Request) -> PriestResponse:
-    """Chat run — session is auto-created if session_id is not provided."""
+async def chat(body: RunRequest, request: Request, memories: bool = True) -> PriestResponse:
+    """Chat run — session is auto-created if session_id is not provided. Pass ?memories=false to disable memory loading and saving."""
     engine = request.app.state.engine
     config: AppConfig = request.app.state.config
     store = request.app.state.store
@@ -89,4 +100,4 @@ async def chat(body: RunRequest, request: Request) -> PriestResponse:
     response = await engine.run(priest_request)
     if not response.ok:
         raise HTTPException(status_code=500, detail={"code": response.error.code, "message": response.error.message})
-    return await _apply_memory(response, body, config, store)
+    return await _apply_memory(response, body, config, store, memories=memories)

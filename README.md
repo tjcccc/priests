@@ -94,10 +94,12 @@ Start the service with `priests service start`, then:
 
 ```
 GET  /health
-POST /v1/run              single run, no session
-POST /v1/chat             session-backed chat
-GET  /v1/sessions         list sessions
-GET  /v1/sessions/{id}    get session with full turn history
+POST /v1/run                        single run, no session
+POST /v1/run?memories=false         single run, memory disabled
+POST /v1/chat                       session-backed chat
+POST /v1/chat?memories=false        session-backed chat, memory disabled
+GET  /v1/sessions                   list sessions
+GET  /v1/sessions/{id}              get session with full turn history
 ```
 
 ## Config file
@@ -121,6 +123,9 @@ port = 8777
 
 [providers.ollama]
 base_url = "http://localhost:11434"
+
+[memory]
+limit = 50  # max daily auto memory files to keep per profile; 0 = unlimited
 ```
 
 Env var overrides use `PRIESTS_` prefix with `__` for nesting:
@@ -137,10 +142,14 @@ Profiles live in `~/.priests/profiles/<name>/` and define behavior context:
 ```
 profiles/
   default/
-    PROFILE.md    # identity and persona
-    RULES.md      # strict constraints
-    CUSTOM.md     # user customization
-    memories/     # persistent memory files (.md or .txt)
+    PROFILE.md      # identity and persona
+    RULES.md        # behavior and constraints (plain language)
+    CUSTOM.md       # user customization
+    profile.toml    # per-profile settings (memories on/off, limit)
+    memories/       # persistent memory files written automatically
+      user.md           # stable facts about the user
+      notes.md          # role-important things (birthdays, goals, etc.)
+      auto_YYYYMMDD.md  # daily observations and conversation context
 ```
 
 Create a new profile:
@@ -155,3 +164,38 @@ Use it:
 ```bash
 priests run --profile english_teacher
 ```
+
+For tool profiles that don't need memory (formatters, dictionaries, etc.), set `memories = false` in `profile.toml`:
+
+```toml
+# ~/.priests/profiles/json_master/profile.toml
+memories = false
+```
+
+Override the global memory limit for a specific profile:
+
+```toml
+memories_limit = 100
+```
+
+## Memory system
+
+priests uses a model-driven memory system. After each turn, memory tags emitted by the model are extracted and written to the profile's `memories/` directory. These files are loaded automatically at the start of every future session.
+
+Three memory categories are routed to separate files:
+
+| Tag | File | Use for |
+|-----|------|---------|
+| `<memory type="user">` | `user.md` | Stable facts: name, hobbies, preferences |
+| `<memory type="note">` | `notes.md` | Role-important things: birthdays, goals, key constraints |
+| `<memory>` | `auto_YYYYMMDD.md` | Daily observations and session context |
+
+The model decides what is worth remembering based on the profile's character. No configuration is required — the behavior is guided by `~/.priests/PRIESTS.md`, which is bootstrapped automatically on first run.
+
+To disable memory for a session:
+
+```bash
+priests run --no-memories
+```
+
+To disable permanently for a profile, set `memories = false` in `profile.toml`.

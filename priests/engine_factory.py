@@ -70,6 +70,11 @@ def _bootstrap_profiles(profiles_root: Path) -> None:
         (default_dir / "CUSTOM.md").write_text("")
         (default_dir / "memories").mkdir()
 
+    # Bootstrap profile.toml — handles v0.2 upgrade for existing installs.
+    profile_toml = default_dir / "profile.toml"
+    if not profile_toml.exists():
+        profile_toml.write_text("memories = true\n")
+
     # Bootstrap PRIESTS.md unconditionally — handles v0.1 → v0.2 upgrade.
     guide_path = profiles_root.parent / _PRIESTS_MD
     if not guide_path.exists():

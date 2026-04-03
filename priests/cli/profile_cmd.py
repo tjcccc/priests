@@ -19,6 +19,18 @@ _PROFILE_MD_STUB = """\
 You are a helpful assistant.
 """
 
+_PROFILE_TOML_STUB = """\
+# Profile settings for {name}
+
+# Set to false to disable memory loading and saving for this profile.
+# Useful for tool profiles (dictionary, formatter, etc.) that don't need user memory.
+memories = true
+
+# Override the global memory limit for this profile (number of auto_YYYYMMDD.md files to keep).
+# Uncomment to override.
+# memories_limit = 50
+"""
+
 _RULES_MD_STUB = """\
 # Rules
 
@@ -84,6 +96,7 @@ def profile_init(
     (profile_dir / "PROFILE.md").write_text(_PROFILE_MD_STUB.format(name=name))
     (profile_dir / "RULES.md").write_text(_RULES_MD_STUB)
     (profile_dir / "CUSTOM.md").write_text("")
+    (profile_dir / "profile.toml").write_text(_PROFILE_TOML_STUB.format(name=name))
     (profile_dir / "memories").mkdir()
 
     console.print(f"[green]Created profile '{name}'[/green] at {profile_dir}")

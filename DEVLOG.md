@@ -2,15 +2,7 @@
 
 ## Future milestones
 
-### Autonomous memory system (v0.2+)
-
-Profile memories (`memories/`) are currently **read-only** — loaded into the system prompt at startup but never written back. There is no mechanism to extract facts from a conversation and persist them as memory files.
-
-Planned work:
-- After each session (or on demand via `/remember`), extract key facts and write them to the profile's `memories/` directory as `.md` files
-- A `GUIDE.md` (or `AGENT.md`) in the profile directory to describe role-specific memory behavior: what to remember, what to forget, how to format entries
-- Memory selection/ranking (currently all memories are loaded in filename order — `priest` core deferred this from Milestone 1)
-- `/new` slash command in chat to start a fresh session while keeping the profile loaded
+### Other deferred items
 
 ### Other deferred items
 - `service stop` / `service logs` with background daemon mode (PID file)
@@ -19,6 +11,46 @@ Planned work:
 - Multi-model dispatch, cron task pool, agent orchestration
 - OpenAI provider (tracked in `priest` Milestone 2)
 - `priest` `SqliteSessionStore.list()` method (priests uses direct aiosqlite query as workaround)
+- Per-profile PRIESTS.md override (v0.3) — currently one global guide for all profiles
+- schedules/plans memory categories (v0.3)
+
+---
+
+## 2026-04-03 — Milestone 2: Autonomous memory system
+
+Implemented model-driven persistent memory for `priests` v0.2.
+
+**Memory extraction (`priests/memory/extractor.py`):**
+- Regex-based extraction of `<memory>`, `<memory type="user">`, `<memory type="note">` tags from model responses
+- Three-file routing: `user.md` (stable facts), `notes.md` (role-important), `auto_YYYYMMDD.md` (daily log)
+- Exact-match deduplication (case-insensitive) — no re-saving known facts across sessions
+- Placeholder filter (`[Unknown]`, `[Name]`, etc.) — prevents hallucinated values from being written
+- `trim_memories()` — deletes oldest `auto_YYYYMMDD.md` files beyond configured limit; `user.md` and `notes.md` are never trimmed
+- `clean_last_turn()` — strips memory tags from the last assistant turn in the session store so they don't leak into future context
+
+**Global memory guide (`~/.priests/PRIESTS.md`):**
+- Bootstrapped automatically on first run and on v0.1→v0.2 upgrade
+- Teaches the model tag syntax, format rules, and when to save via a concrete example
+- User-editable; deleting or emptying it disables auto-memory without a code change
+
+**Per-profile config (`priests/profile/config.py`):**
+- `profile.toml` scaffolded by `priests profile init` alongside PROFILE.md/RULES.md
+- `memories = false` — disables memory loading and saving for tool profiles (formatters, dictionaries, etc.)
+- `memories_limit` — overrides the global `[memory].limit` for a specific profile
+- Precedence: CLI flag > `profile.toml` > global `priests.toml`
+
+**CLI (`priests/cli/run_cmd.py`):**
+- `--memories/--no-memories` flag (default on) — disables memory for a single session
+- Chat prompt changed: `you>` → `user >`, `ai>` → `{profile_name} >`
+- `[memory saved]` hint shown after turns where facts were written
+
+**HTTP service (`priests/service/routes/run.py`):**
+- `?memories=false` query param on `/v1/run` and `/v1/chat`
+
+**Config (`priests/config/model.py`):**
+- `MemoryConfig` with `limit: int = 50` — controls how many daily auto files to retain globally
+
+**Verified against:** Ollama + qwen3.5:9b locally. Cross-session recall confirmed (name, preferences, explicit "remember this" requests).
 
 ---
 
