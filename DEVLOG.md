@@ -15,6 +15,28 @@
 
 ---
 
+## 2026-04-04 — v0.4.4 bug fixes
+
+**Version string out of sync (`__init__.py`):**
+- `__init__.py` still had `"0.1.0"`; bumped to match `pyproject.toml`
+
+**Premature `{profile} >` prompt in streaming chat:**
+- Label was printed before the first chunk arrived, looking like an input prompt
+- Now deferred: printed lazily on first non-empty chunk; fallback prints it if stream is empty
+
+**Words concatenated in streamed output (`StreamingStripper`):**
+- `strip_memory_tags()` called `.strip()` per-chunk — ate whitespace at chunk boundaries
+- Removed `.strip()` from `strip_memory_tags()`; added `StreamingStripper` class to `extractor.py`
+- `StreamingStripper.feed()` buffers from the last `<memory` start, flushes safe prefix
+- `StreamingStripper.flush()` drains the buffer after stream ends
+- Both `_run_single` and `_run_chat` updated to use `StreamingStripper` instead of per-chunk stripping
+
+**Profile memories not recalled (`priest-core` `context_builder.py`):**
+- Memory file contents were injected as unlabeled raw text blocks — model didn't recognize them as facts to recall
+- All memory files now combined under a `## Loaded Memories` heading in the system prompt
+
+---
+
 ## 2026-04-04 — Provider fixes + proxy support
 
 **Root cause: Python 3.14 breaks httpcore's anyio async TLS backend**

@@ -11,6 +11,9 @@ _TAG_RE = re.compile(
     r'<memory(?:\s+type=["\']?(\w+)["\']?)?\s*>(.*?)</memory>',
     re.DOTALL | re.IGNORECASE,
 )
+# Matches the start of a (possibly incomplete) memory tag — used to hold back
+# buffered text during streaming until the tag is complete or ruled out.
+_TAG_START_RE = re.compile(r"<memory", re.IGNORECASE)
 _PLACEHOLDER_RE = re.compile(r"\[[^\]]+\]")  # [Unknown], [Name], [N/A], etc.
 
 MemoryType = Literal["auto", "user", "note"]
@@ -48,8 +51,41 @@ def extract_memories(text: str) -> list[tuple[MemoryType, str]]:
 
 
 def strip_memory_tags(text: str) -> str:
-    """Remove all <memory ...>...</memory> tags from text for display."""
-    return _TAG_RE.sub("", text).strip()
+    """Remove all <memory ...>...</memory> tags from a complete string."""
+    return _TAG_RE.sub("", text)
+
+
+class StreamingStripper:
+    """Buffer streaming chunks and flush only text that cannot be part of a memory tag.
+
+    Memory tags may arrive split across multiple chunks. Buffering up to the last
+    `<memory` start ensures we never emit a partial tag to the terminal.
+    Call flush() after the stream ends to emit any remaining buffered text.
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+
+    def feed(self, chunk: str) -> str:
+        """Accept a new chunk; return the safe-to-display text so far."""
+        self._buf += chunk
+        # Strip any complete memory tags first.
+        self._buf = _TAG_RE.sub("", self._buf)
+        # Hold back everything from the last `<memory` onwards (may be incomplete).
+        m = None
+        for m in _TAG_START_RE.finditer(self._buf):
+            pass
+        if m is not None:
+            safe, self._buf = self._buf[: m.start()], self._buf[m.start() :]
+        else:
+            safe, self._buf = self._buf, ""
+        return safe
+
+    def flush(self) -> str:
+        """Return any remaining buffered text (strip complete tags, emit the rest)."""
+        remaining = _TAG_RE.sub("", self._buf)
+        self._buf = ""
+        return remaining
 
 
 # ---------------------------------------------------------------------------

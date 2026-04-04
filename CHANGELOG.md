@@ -2,6 +2,25 @@
 
 All notable changes to `priests` are documented here.
 
+## [0.4.4] — 2026-04-04
+
+### Fixed
+- `--version` reported `v0.1.0` instead of the current version — `__init__.py` was
+  not updated alongside `pyproject.toml`
+- Streaming chat printed `{profile} >` immediately on Enter, before the model began
+  responding — made it look like an input prompt; now deferred until the first token
+  arrives
+- Streamed response had words run together with no spaces — `strip_memory_tags()`
+  called `.strip()` per-chunk, eating leading/trailing whitespace between chunks
+- Memory tags leaked into terminal output when split across stream chunks —
+  `StreamingStripper` now buffers from the first `<memory` occurrence and only
+  flushes safe text, emitting the remainder on stream end
+- Profile memories not recalled by the model — facts were injected as unlabeled raw
+  text; now collected under a `## Loaded Memories` heading in the system prompt
+  (fix in `priest-core` `context_builder.py`)
+
+---
+
 ## [0.4.0] — 2026-04-04
 
 ### Added

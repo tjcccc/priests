@@ -62,7 +62,7 @@ async def _run_single(
 ) -> None:
     from priest import PriestRequest, SessionRef
     from priests.engine_factory import build_engine, load_global_guide
-    from priests.memory.extractor import clean_last_turn, extract_memories, strip_memory_tags, write_memories, trim_memories
+    from priests.memory.extractor import clean_last_turn, extract_memories, StreamingStripper, write_memories, trim_memories
     from priests.profile.config import load_profile_config
 
     engine, store = await build_engine(config)
@@ -97,12 +97,17 @@ async def _run_single(
     try:
         async with store:
             try:
+                stripper = StreamingStripper()
                 async for chunk in engine.stream(request):
-                    clean = strip_memory_tags(chunk)
-                    if clean:
-                        sys.stdout.write(clean)
+                    safe = stripper.feed(chunk)
+                    if safe:
+                        sys.stdout.write(safe)
                         sys.stdout.flush()
                     collected.append(chunk)
+                tail = stripper.flush()
+                if tail:
+                    sys.stdout.write(tail)
+                    sys.stdout.flush()
             except PriestError as exc:
                 err_console.print(f"\n[red]Error:[/red] {exc.code}: {escape(exc.message)}")
                 raise typer.Exit(1)
@@ -148,7 +153,7 @@ async def _run_chat(
 
     from priest import PriestConfig, PriestRequest, SessionRef
     from priests.engine_factory import build_engine, load_global_guide
-    from priests.memory.extractor import clean_last_turn, extract_memories, strip_memory_tags, write_memories, trim_memories
+    from priests.memory.extractor import clean_last_turn, extract_memories, StreamingStripper, write_memories, trim_memories
     from priests.profile.config import load_profile_config
 
     try:
@@ -240,19 +245,33 @@ async def _run_chat(
 
             collected: list[str] = []
             import sys as _sys
-            console.print(f"[bold]{profile} >[/bold] ", end="")
-            _sys.stdout.flush()
+            header_printed = False
+            stripper = StreamingStripper()
             try:
                 async for chunk in engine.stream(request):
-                    clean = strip_memory_tags(chunk)
-                    if clean:
-                        _sys.stdout.write(clean)
+                    safe = stripper.feed(chunk)
+                    if safe:
+                        if not header_printed:
+                            console.print(f"[bold]{profile} >[/bold] ", end="")
+                            _sys.stdout.flush()
+                            header_printed = True
+                        _sys.stdout.write(safe)
                         _sys.stdout.flush()
                     collected.append(chunk)
+                tail = stripper.flush()
+                if tail:
+                    if not header_printed:
+                        console.print(f"[bold]{profile} >[/bold] ", end="")
+                        _sys.stdout.flush()
+                        header_printed = True
+                    _sys.stdout.write(tail)
+                    _sys.stdout.flush()
             except PriestError as exc:
                 err_console.print(f"\n[red]Error:[/red] {exc.code}: {escape(exc.message)}")
                 continue
 
+            if not header_printed:
+                console.print(f"[bold]{profile} >[/bold]")
             console.print("\n")  # blank line after response
 
             full_text = "".join(collected)
