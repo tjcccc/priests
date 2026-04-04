@@ -384,7 +384,7 @@ wheels = [
 ]
 
 [[package]]
-name = "priest"
+name = "priest-core"
 version = "0.2.0"
 source = { editable = "../priest" }
 dependencies = [
@@ -419,7 +419,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "openai" },
-    { name = "priest" },
+    { name = "priest-core" },
     { name = "pydantic" },
     { name = "questionary" },
     { name = "rich" },
@@ -440,7 +440,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.111" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "openai", specifier = ">=2.30.0" },
-    { name = "priest", editable = "../priest" },
+    { name = "priest-core", editable = "../priest" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "questionary", specifier = ">=2.0" },
     { name = "rich", specifier = ">=13.0" },
