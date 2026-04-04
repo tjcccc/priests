@@ -2,6 +2,17 @@
 
 All notable changes to `priests` are documented here.
 
+## [0.4.5] — 2026-04-04
+
+### Fixed
+- Spurious `[` character appearing before `user >` input prompt — caused by mixing
+  Rich `console.print()` and raw `sys.stdout.write()` in the streaming loop;
+  the ESC byte from Rich's ANSI bold code was consumed by prompt_toolkit, leaving
+  the bare `[` visible; replaced all in-loop Rich calls with `sys.stdout.write()`
+  using raw ANSI codes
+
+---
+
 ## [0.4.4] — 2026-04-04
 
 ### Fixed
