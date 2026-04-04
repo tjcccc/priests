@@ -11,8 +11,32 @@
 - Multi-model dispatch, cron task pool, agent orchestration
 - OpenAI provider (tracked in `priest` Milestone 2)
 - `priest` `SqliteSessionStore.list()` method (priests uses direct aiosqlite query as workaround)
-- Per-profile PRIESTS.md override (v0.3) — currently one global guide for all profiles
 - schedules/plans memory categories (v0.3)
+
+---
+
+## 2026-04-04 — Provider fixes + proxy support
+
+**Root cause: Python 3.14 breaks httpcore's anyio async TLS backend**
+- `AsyncOpenAI` inside `anyio.run()` fails in chat mode (real TTY + prompt_toolkit) due to `httpcore/_backends/anyio.py start_tls` bug on Python 3.14
+- Fix: switched `OpenAICompatProvider` to use sync `OpenAI` client in `anyio.to_thread.run_sync()` — uses httpcore sync sockets instead of anyio async TLS
+- File: `priest/priest/providers/openai_compat_provider.py`
+
+**Proxy support**
+- New `[proxy] url = "..."` section in `priests.toml`
+- `use_proxy = true/false` on each provider config (`OpenAICompatConfig`, `AnthropicConfig`)
+- `engine_factory.py` resolves proxy URL and passes it to adapter constructors
+- `OpenAICompatProvider`, `AnthropicProvider` each accept `proxy: str | None`
+- Proxy passed via `httpx.Client(proxy=...)` / `httpx.AsyncClient(proxy=...)`
+
+**`think` parameter scoped to Qwen/Ollama providers only**
+- Previously sent `{"think": False}` to all providers — breaks Gemini (400 unknown field)
+- `_THINK_PROVIDERS = {"ollama", "bailian", "alibaba_cloud"}` in `run_cmd.py`
+- Only those providers get `think` in `provider_options`; all others get `{}`
+
+**Gemini base URL corrected**
+- Registry had `/openai/v1`, correct is `/v1beta/openai/`
+- Fixed in `registry.py` and updated existing `priests.toml`
 
 ---
 

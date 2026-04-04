@@ -6,6 +6,8 @@ from typing import Annotated
 
 import anyio
 import typer
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.shortcuts import PromptSession
 from rich.console import Console
 from rich.markup import escape
 
@@ -17,16 +19,34 @@ run_app = typer.Typer(help="Run a prompt or enter interactive chat.")
 console = Console()
 err_console = Console(stderr=True)
 
+# Key bindings for interactive chat: Ctrl+J inserts a newline; Enter submits.
+_chat_kb = KeyBindings()
+
+@_chat_kb.add("c-j")
+def _insert_newline(event):
+    event.current_buffer.insert_text("\n")
+
+
+# Providers that understand the `think` parameter in the request body.
+_THINK_PROVIDERS = {"ollama", "bailian", "alibaba_cloud"}
+
 
 def _build_priest_config(config: AppConfig, provider: str | None, model: str | None, no_think: bool):
     from priest import PriestConfig
 
+    effective_provider = provider or config.default.provider or ""
+    if effective_provider in _THINK_PROVIDERS:
+        think_on = config.default.think and not no_think
+        provider_options: dict = {"think": think_on}
+    else:
+        provider_options = {}
+
     return PriestConfig(
-        provider=provider or config.default.provider,
+        provider=effective_provider,
         model=model or config.default.model,
         timeout_seconds=config.default.timeout_seconds,
         max_output_tokens=config.default.max_output_tokens,
-        provider_options={"think": False} if (no_think or not config.default.think) else {},
+        provider_options=provider_options,
     )
 
 
@@ -79,7 +99,7 @@ async def _run_single(
         raise typer.Exit(1)
 
     if not response.ok:
-        err_console.print(f"[red]Error:[/red] {response.error.code}: {response.error.message}")
+        err_console.print(f"[red]Error:[/red] {response.error.code}: {escape(response.error.message)}")
         raise typer.Exit(1)
 
     facts = extract_memories(response.text or "") if memories_on else []
@@ -98,7 +118,7 @@ _CHAT_HELP = """\
   [bold]/exit[/bold]         Exit the chat.
   [bold]/think on[/bold]     Enable thinking mode (if model supports it).
   [bold]/think off[/bold]    Disable thinking mode.
-  [bold]/new[/bold]          Start a new session. [dim](coming soon)[/dim]
+  [bold]/new[/bold]          Start a new session.
   [bold]/help[/bold]         Show this message.\
 """
 
@@ -144,10 +164,12 @@ async def _run_chat(
     console.print(f"[dim]Session: {sid}[/dim]")
     console.print("[dim]Type /help for commands, Ctrl-C to quit.[/dim]\n")
 
+    prompt_session: PromptSession[str] = PromptSession(key_bindings=_chat_kb)
+
     async with store:
         while True:
             try:
-                raw = input("user > ").strip()
+                raw = (await prompt_session.prompt_async("user > ")).strip()
             except (EOFError, KeyboardInterrupt):
                 console.print("\n[dim]Bye.[/dim]")
                 break
@@ -184,7 +206,9 @@ async def _run_chat(
                     continue
 
                 elif cmd == "/new":
-                    console.print("[dim]/new is coming soon.[/dim]")
+                    sid = str(uuid.uuid4())
+                    session_ref = SessionRef(id=sid, create_if_missing=True)
+                    console.print(f"[dim]New session: {sid}[/dim]")
                     continue
 
                 else:
@@ -203,7 +227,7 @@ async def _run_chat(
             response = await engine.run(request)
 
             if not response.ok:
-                err_console.print(f"[red]Error:[/red] {response.error.code}: {response.error.message}")
+                err_console.print(f"[red]Error:[/red] {response.error.code}: {escape(response.error.message)}")
                 continue
 
             await clean_last_turn(store, response.session.id) if response.session else None

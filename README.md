@@ -6,27 +6,15 @@ CLI tool and HTTP service for [priest](https://github.com/tjcccc/priest) AI orch
 
 - `priests run` — interactive chat or single-prompt CLI
 - `priests service start` — FastAPI HTTP service (`POST /v1/run`, `POST /v1/chat`, session management)
-- Profile management, config management, provider setup
+- Profile management, config management, provider and model setup
 
 ## Requirements
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/)
-- A running [Ollama](https://ollama.com) instance with at least one model pulled
+- At least one configured provider (Ollama local, or any supported cloud API)
 
 ## Install
-
-### From wheels (recommended for testing)
-
-```bash
-pip install priest-0.1.0-py3-none-any.whl priests-0.1.0-py3-none-any.whl
-```
-
-Or isolated with `uv tool`:
-
-```bash
-uv tool install priests-0.1.0-py3-none-any.whl --find-links .
-```
 
 ### From source
 
@@ -34,7 +22,6 @@ uv tool install priests-0.1.0-py3-none-any.whl --find-links .
 git clone <this repo>
 cd priests
 uv sync
-uv pip install -e .
 ```
 
 ## Setup
@@ -43,7 +30,7 @@ uv pip install -e .
 priests init
 ```
 
-Walks you through selecting a provider, picking a local model, and writing `~/.priests/priests.toml`.
+Walks you through selecting a provider, entering an API key, picking a model, and writing `~/.priests/priests.toml`.
 
 ## Usage
 
@@ -57,7 +44,16 @@ priests run "your prompt"
 priests run --prompt "your prompt"
 
 # With options
-priests run --provider ollama --model qwen3.5:9b --profile friend --session my-session
+priests run --provider bailian --model qwen-plus --profile friend --session my-session
+
+# Model management
+priests model list               # list saved models, shows current default
+priests model default            # interactively pick a new default
+priests model add                # add a new provider + model
+
+# Provider info
+priests providers                # list all providers with configured status
+priests providers models <name>  # show known models for a provider
 
 # Profile management
 priests profile list
@@ -65,7 +61,7 @@ priests profile init "my_profile"
 
 # Config
 priests config show
-priests config set default.model llama3.2:3b
+priests config set default.model qwen-plus
 
 # HTTP service (foreground)
 priests service start
@@ -83,24 +79,29 @@ Inside `priests run` interactive mode:
 | Command | Description |
 |---|---|
 | `/help` | Show available commands |
-| `/think on` | Enable thinking mode (Qwen3/Ollama) |
+| `/think on` | Enable thinking mode (Qwen3 / Ollama) |
 | `/think off` | Disable thinking mode |
-| `/new` | New session *(coming soon)* |
+| `/new` | Start a new session |
 | `/exit` | Exit the chat |
 
-## HTTP API
+Ctrl+J inserts a newline. Enter submits.
 
-Start the service with `priests service start`, then:
+## Supported providers
 
-```
-GET  /health
-POST /v1/run                        single run, no session
-POST /v1/run?memories=false         single run, memory disabled
-POST /v1/chat                       session-backed chat
-POST /v1/chat?memories=false        session-backed chat, memory disabled
-GET  /v1/sessions                   list sessions
-GET  /v1/sessions/{id}              get session with full turn history
-```
+| Key | Provider | Region |
+|-----|----------|--------|
+| `ollama` | Ollama (local models) | Local |
+| `openai` | OpenAI | International |
+| `anthropic` | Anthropic Claude | International |
+| `gemini` | Google Gemini | International |
+| `groq` | Groq | International |
+| `openrouter` | OpenRouter | International |
+| `minimax` | MiniMax | International |
+| `bailian` | Alibaba Bailian | China mainland |
+| `alibaba_cloud` | Alibaba Cloud | International |
+| `deepseek` | DeepSeek | China mainland |
+| `kimi` | Kimi (Moonshot) | China mainland |
+| `custom` | Custom OpenAI-compatible endpoint | Any |
 
 ## Config file
 
@@ -108,10 +109,16 @@ Location: `~/.priests/priests.toml`
 
 ```toml
 [default]
-provider = "ollama"
-model = "qwen3.5:9b"
+provider = "bailian"
+model = "qwen-plus"
 profile = "default"
 think = false
+
+[models]
+options = [
+    "bailian/qwen-plus",
+    "gemini/gemini-2.5-flash",
+]
 
 [paths]
 profiles_dir = "~/.priests/profiles"
@@ -121,17 +128,34 @@ sessions_db  = "~/.priests/sessions.db"
 host = "127.0.0.1"
 port = 8777
 
+[proxy]
+url = "http://127.0.0.1:7890"
+
 [providers.ollama]
 base_url = "http://localhost:11434"
+
+[providers.bailian]
+api_key = "sk-..."
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+use_proxy = false
+
+[providers.gemini]
+api_key = "AIza..."
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+use_proxy = true
 
 [memory]
 limit = 50  # max daily auto memory files to keep per profile; 0 = unlimited
 ```
 
+### Proxy
+
+Set `[proxy] url` to your local proxy (e.g. Clash, Shadowsocks). Then set `use_proxy = true` on each provider that needs it. Providers with `use_proxy = false` (the default) connect directly even when `[proxy]` is configured.
+
 Env var overrides use `PRIESTS_` prefix with `__` for nesting:
 
 ```bash
-PRIESTS_DEFAULT__MODEL=llama3.2:3b priests run "hello"
+PRIESTS_DEFAULT__MODEL=qwen-plus priests run "hello"
 PRIESTS_SERVICE__PORT=9000 priests service start
 ```
 
@@ -199,3 +223,17 @@ priests run --no-memories
 ```
 
 To disable permanently for a profile, set `memories = false` in `profile.toml`.
+
+## HTTP API
+
+Start the service with `priests service start`, then:
+
+```
+GET  /health
+POST /v1/run                        single run, no session
+POST /v1/run?memories=false         single run, memory disabled
+POST /v1/chat                       session-backed chat
+POST /v1/chat?memories=false        session-backed chat, memory disabled
+GET  /v1/sessions                   list sessions
+GET  /v1/sessions/{id}              get session with full turn history
+```

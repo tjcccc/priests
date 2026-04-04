@@ -38,8 +38,41 @@ class OllamaConfig(BaseModel):
     base_url: str = "http://localhost:11434"
 
 
+class OpenAICompatConfig(BaseModel):
+    api_key: str = ""
+    base_url: str = ""
+    use_proxy: bool = False
+
+
+class AnthropicConfig(BaseModel):
+    api_key: str = ""
+    use_proxy: bool = False
+
+
+class ProxyConfig(BaseModel):
+    url: str = ""
+
+
 class ProvidersConfig(BaseModel):
+    # Ollama is always present (local, no key needed).
+    # All API providers default to None and are only written to priests.toml
+    # once the user has configured them.
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+    openai: OpenAICompatConfig | None = None
+    anthropic: AnthropicConfig | None = None
+    gemini: OpenAICompatConfig | None = None
+    bailian: OpenAICompatConfig | None = None
+    alibaba_cloud: OpenAICompatConfig | None = None
+    minimax: OpenAICompatConfig | None = None
+    deepseek: OpenAICompatConfig | None = None
+    kimi: OpenAICompatConfig | None = None
+    groq: OpenAICompatConfig | None = None
+    openrouter: OpenAICompatConfig | None = None
+    custom: OpenAICompatConfig | None = None
+
+
+class ModelsConfig(BaseModel):
+    options: list[str] = Field(default_factory=list)  # stored as "provider/model"
 
 
 class MemoryConfig(BaseModel):
@@ -48,7 +81,9 @@ class MemoryConfig(BaseModel):
 
 class AppConfig(BaseModel):
     default: DefaultsConfig = Field(default_factory=DefaultsConfig)
+    models: ModelsConfig = Field(default_factory=ModelsConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
     service: ServiceConfig = Field(default_factory=ServiceConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    proxy: ProxyConfig | None = None

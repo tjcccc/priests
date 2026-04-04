@@ -5,7 +5,9 @@ from pathlib import Path
 from priest import PriestEngine
 from priest.profile.default_profile import IDENTITY, RULES
 from priest.profile.loader import FilesystemProfileLoader
+from priest.providers.anthropic_provider import AnthropicProvider
 from priest.providers.ollama_provider import OllamaProvider
+from priest.providers.openai_compat_provider import OpenAICompatProvider
 from priest.session.sqlite_store import SqliteSessionStore
 
 from priests.config.model import AppConfig
@@ -119,9 +121,33 @@ async def build_engine(config: AppConfig) -> tuple[PriestEngine, SqliteSessionSt
 
     store = SqliteSessionStore(db_path=sessions_db)
 
+    p = config.providers
+    proxy_url = config.proxy.url if (config.proxy and config.proxy.url) else None
+
     adapters: dict = {
-        "ollama": OllamaProvider(base_url=config.providers.ollama.base_url),
+        "ollama": OllamaProvider(base_url=p.ollama.base_url),
     }
+
+    _compat = [
+        ("openai", p.openai),
+        ("gemini", p.gemini),
+        ("bailian", p.bailian),
+        ("alibaba_cloud", p.alibaba_cloud),
+        ("minimax", p.minimax),
+        ("deepseek", p.deepseek),
+        ("kimi", p.kimi),
+        ("groq", p.groq),
+        ("openrouter", p.openrouter),
+        ("custom", p.custom),
+    ]
+    for name, cfg in _compat:
+        if cfg and cfg.base_url:
+            proxy = proxy_url if (cfg.use_proxy and proxy_url) else None
+            adapters[name] = OpenAICompatProvider(name, cfg.base_url, cfg.api_key, proxy=proxy)
+
+    if p.anthropic and p.anthropic.api_key:
+        proxy = proxy_url if (p.anthropic.use_proxy and proxy_url) else None
+        adapters["anthropic"] = AnthropicProvider(p.anthropic.api_key, proxy=proxy)
 
     engine = PriestEngine(
         profile_loader=profile_loader,

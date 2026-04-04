@@ -8,6 +8,8 @@ from priests.cli.init_cmd import init_command
 from priests.cli.run_cmd import run_app
 from priests.cli.profile_cmd import profile_app
 from priests.cli.config_cmd import config_app
+from priests.cli.model_cmd import model_app
+from priests.cli.providers_cmd import providers_app
 from priests.cli.service_cmd import service_app
 
 
@@ -32,6 +34,8 @@ app.command("init")(init_command)
 app.add_typer(run_app, name="run")
 app.add_typer(profile_app, name="profile")
 app.add_typer(config_app, name="config")
+app.add_typer(model_app, name="model")
+app.add_typer(providers_app, name="providers")
 app.add_typer(service_app, name="service")
 
 

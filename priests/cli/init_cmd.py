@@ -10,27 +10,20 @@ from rich.console import Console
 
 from priests.config.loader import is_initialized, save_config
 from priests.config.model import (
+    AnthropicConfig,
     AppConfig,
     DefaultsConfig,
     OllamaConfig,
+    OpenAICompatConfig,
     PathsConfig,
     ProvidersConfig,
     ServiceConfig,
 )
 from priests.engine_factory import _bootstrap_profiles
+from priests.registry import ProviderInfo, get_provider, list_providers
 
 console = Console()
 err_console = Console(stderr=True)
-
-# Ordered list — append new providers here as they are implemented
-_PROVIDERS: list[tuple[str, str]] = [
-    ("ollama", "Local models via Ollama"),
-    # ("openai",     "OpenAI API"),
-    # ("gemini",     "Google Gemini"),
-    # ("claude",     "Anthropic Claude"),
-    # ("bailian",    "Alibaba Bailian"),
-    # ("openrouter", "OpenRouter (multi-provider)"),
-]
 
 
 def _arrow_select(prompt: str, choices: list[questionary.Choice]) -> str:
@@ -66,7 +59,7 @@ def _select_ollama_model(default_url: str) -> tuple[str, str]:
 
         if not models:
             console.print("[yellow]No local models found.[/yellow] Make sure you have pulled at least one model.")
-            console.print("  e.g. [bold]ollama pull qwen3.5:9b[/bold]\n")
+            console.print("  e.g. [bold]ollama pull qwen3:8b[/bold]\n")
             model = typer.prompt("Or enter a model name manually").strip()
             return model, base_url
 
@@ -75,6 +68,50 @@ def _select_ollama_model(default_url: str) -> tuple[str, str]:
             [questionary.Choice(title=m) for m in models],
         )
         return model, base_url
+
+
+def _select_model(info: ProviderInfo) -> str:
+    """Select a model for a non-Ollama provider.
+
+    Shows an arrow selector when known_models is non-empty, with an
+    'Enter manually' escape hatch. Falls back to free-text when the list
+    is empty (OpenRouter, Custom).
+    """
+    if not info.known_models:
+        return typer.prompt("Model name").strip()
+
+    _MANUAL = "__manual__"
+    choices = [questionary.Choice(title=m) for m in info.known_models]
+    choices.append(questionary.Choice(title="Enter manually…", value=_MANUAL))
+
+    selected = _arrow_select("Select model:", choices)
+    if selected == _MANUAL:
+        return typer.prompt("Model name").strip()
+    return selected
+
+
+def _register_model(config: AppConfig, provider: str, model: str) -> None:
+    """Add provider/model to config.models.options if not already present."""
+    entry = f"{provider}/{model}"
+    if entry not in config.models.options:
+        config.models.options.append(entry)
+
+
+def _apply_provider_to_config(
+    providers: ProvidersConfig,
+    provider: str,
+    api_key: str,
+    custom_base_url: str,
+) -> None:
+    """Write api_key (and base_url for custom) into the providers config in-place."""
+    if provider == "anthropic":
+        providers.anthropic = AnthropicConfig(api_key=api_key)
+    elif provider == "custom":
+        providers.custom = OpenAICompatConfig(api_key=api_key, base_url=custom_base_url)
+    elif provider != "ollama":
+        info = get_provider(provider)
+        base_url = info.default_base_url if info else ""
+        setattr(providers, provider, OpenAICompatConfig(api_key=api_key, base_url=base_url))
 
 
 def init_command(
@@ -92,24 +129,32 @@ def init_command(
     console.print("Let's set up your configuration.\n")
 
     # --- Provider ---
-    provider = _arrow_select(
-        "Select a provider for initialization:",
-        [questionary.Choice(title=f"{name}  —  {desc}", value=name) for name, desc in _PROVIDERS],
+    providers_list = list_providers()
+    provider_name = _arrow_select(
+        "Select a provider:",
+        [questionary.Choice(title=f"{p.name}  —  {p.label}", value=p.name) for p in providers_list],
     )
     console.print()
 
-    # --- Model (provider-specific) ---
-    ollama_base_url = "http://localhost:11434"
+    info = next(p for p in providers_list if p.name == provider_name)
 
-    if provider == "ollama":
+    # --- API key + model ---
+    ollama_base_url = "http://localhost:11434"
+    api_key = ""
+    custom_base_url = ""
+
+    if provider_name == "ollama":
         model, ollama_base_url = _select_ollama_model(ollama_base_url)
     else:
-        # Generic free-text for providers not yet implemented
-        model = typer.prompt("Model name").strip()
+        if provider_name == "custom":
+            custom_base_url = typer.prompt("Base URL (e.g. https://my-server/v1)").strip().rstrip("/")
+        if info.needs_api_key:
+            api_key = typer.prompt("API key", hide_input=False).strip()
+        model = _select_model(info)
 
     console.print()
 
-    # --- Paths (show defaults, allow override) ---
+    # --- Paths ---
     default_profiles_dir = str(Path.home() / ".priests" / "profiles")
     default_sessions_db = str(Path.home() / ".priests" / "sessions.db")
 
@@ -117,29 +162,32 @@ def init_command(
     sessions_db_str = typer.prompt("Sessions database", default=default_sessions_db)
 
     # --- Build and save config ---
+    providers = ProvidersConfig(ollama=OllamaConfig(base_url=ollama_base_url))
+    _apply_provider_to_config(providers, provider_name, api_key, custom_base_url)
+
     config = AppConfig(
-        default=DefaultsConfig(provider=provider, model=model),
+        default=DefaultsConfig(provider=provider_name, model=model),
         paths=PathsConfig(
             profiles_dir=Path(profiles_dir_str),
             sessions_db=Path(sessions_db_str),
         ),
         service=ServiceConfig(),
-        providers=ProvidersConfig(ollama=OllamaConfig(base_url=ollama_base_url)),
+        providers=providers,
     )
 
+    _register_model(config, provider_name, model)
     saved_path = save_config(config, config_file)
 
-    # --- Bootstrap profiles ---
     profiles_root = Path(profiles_dir_str).expanduser()
     _bootstrap_profiles(profiles_root)
 
     console.print(f"\n[green]Initialized![/green] Config saved to {saved_path}")
-    console.print(f"  provider : {provider}")
+    console.print(f"  provider : {provider_name}")
     console.print(f"  model    : {model}")
     console.print(f"  profiles : {profiles_root}")
     console.print("\n[bold]Next steps:[/bold]")
     console.print("  [bold]priests run[/bold]                          start an interactive chat")
     console.print("  [bold]priests run --prompt \"...\"[/bold]           send a single prompt")
     console.print("  [bold]priests profile init \"my_profile\"[/bold]    create a custom profile")
-    console.print("  [bold]priests models add[/bold]                    add more providers")
+    console.print("  [bold]priests model add[/bold]                     configure an additional provider")
     console.print("  [bold]priests --help[/bold]  /  [bold]priests <command> --help[/bold]")
