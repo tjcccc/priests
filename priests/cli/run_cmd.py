@@ -247,13 +247,14 @@ async def _run_chat(
             import sys as _sys
             header_printed = False
             stripper = StreamingStripper()
+            _BOLD = "\033[1m"
+            _RESET = "\033[0m"
             try:
                 async for chunk in engine.stream(request):
                     safe = stripper.feed(chunk)
                     if safe:
                         if not header_printed:
-                            console.print(f"[bold]{profile} >[/bold] ", end="")
-                            _sys.stdout.flush()
+                            _sys.stdout.write(f"{_BOLD}{profile} >{_RESET} ")
                             header_printed = True
                         _sys.stdout.write(safe)
                         _sys.stdout.flush()
@@ -261,8 +262,7 @@ async def _run_chat(
                 tail = stripper.flush()
                 if tail:
                     if not header_printed:
-                        console.print(f"[bold]{profile} >[/bold] ", end="")
-                        _sys.stdout.flush()
+                        _sys.stdout.write(f"{_BOLD}{profile} >{_RESET} ")
                         header_printed = True
                     _sys.stdout.write(tail)
                     _sys.stdout.flush()
@@ -271,8 +271,9 @@ async def _run_chat(
                 continue
 
             if not header_printed:
-                console.print(f"[bold]{profile} >[/bold]")
-            console.print("\n")  # blank line after response
+                _sys.stdout.write(f"{_BOLD}{profile} >{_RESET}\n")
+            _sys.stdout.write("\n\n")
+            _sys.stdout.flush()
 
             full_text = "".join(collected)
             if request.session:
