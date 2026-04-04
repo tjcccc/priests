@@ -89,28 +89,40 @@ async def _run_single(
         system_context=system_context,
     )
 
+    from priest.errors import PriestError
+
+    import sys
+    collected: list[str] = []
+    start_ms = int(__import__("time").monotonic() * 1000)
     try:
         async with store:
-            response = await engine.run(request)
-            if response.session:
-                await clean_last_turn(store, response.session.id)
+            try:
+                async for chunk in engine.stream(request):
+                    clean = strip_memory_tags(chunk)
+                    if clean:
+                        sys.stdout.write(clean)
+                        sys.stdout.flush()
+                    collected.append(chunk)
+            except PriestError as exc:
+                err_console.print(f"\n[red]Error:[/red] {exc.code}: {escape(exc.message)}")
+                raise typer.Exit(1)
+
+            full_text = "".join(collected)
+            if request.session:
+                await clean_last_turn(store, request.session.id)
     except NotInitializedError as e:
         err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
 
-    if not response.ok:
-        err_console.print(f"[red]Error:[/red] {response.error.code}: {escape(response.error.message)}")
-        raise typer.Exit(1)
+    latency_ms = int(__import__("time").monotonic() * 1000) - start_ms
+    console.print()  # newline after streamed output
+    console.print(f"[dim]({latency_ms}ms)[/dim]")
 
-    facts = extract_memories(response.text or "") if memories_on else []
+    facts = extract_memories(full_text) if memories_on else []
     if facts:
         memories_dir = config.paths.profiles_dir.expanduser() / profile / "memories"
         write_memories(memories_dir, facts)
         trim_memories(memories_dir, mem_limit)
-
-    console.print(strip_memory_tags(response.text or ""))
-    if response.execution.latency_ms is not None:
-        console.print(f"[dim]({response.execution.latency_ms}ms)[/dim]")
 
 
 _CHAT_HELP = """\
@@ -224,22 +236,33 @@ async def _run_chat(
                 system_context=system_context_base,
             )
 
-            response = await engine.run(request)
+            from priest.errors import PriestError
 
-            if not response.ok:
-                err_console.print(f"[red]Error:[/red] {response.error.code}: {escape(response.error.message)}")
+            collected: list[str] = []
+            import sys as _sys
+            console.print(f"[bold]{profile} >[/bold] ", end="")
+            _sys.stdout.flush()
+            try:
+                async for chunk in engine.stream(request):
+                    clean = strip_memory_tags(chunk)
+                    if clean:
+                        _sys.stdout.write(clean)
+                        _sys.stdout.flush()
+                    collected.append(chunk)
+            except PriestError as exc:
+                err_console.print(f"\n[red]Error:[/red] {exc.code}: {escape(exc.message)}")
                 continue
 
-            await clean_last_turn(store, response.session.id) if response.session else None
+            console.print("\n")  # blank line after response
 
-            facts = extract_memories(response.text or "") if memories_on else []
+            full_text = "".join(collected)
+            if request.session:
+                await clean_last_turn(store, request.session.id)
+
+            facts = extract_memories(full_text) if memories_on else []
             if facts:
                 write_memories(memories_dir, facts)
                 trim_memories(memories_dir, mem_limit)
-
-            display = strip_memory_tags(response.text or "")
-            console.print(f"[bold]{profile} >[/bold] {escape(display)}\n")
-            if facts:
                 console.print("[dim][memory saved][/dim]")
 
 
