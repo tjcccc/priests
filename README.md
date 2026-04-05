@@ -85,6 +85,8 @@ Inside `priests run` interactive mode:
 | `/think on` | Enable thinking mode (Qwen3 / Ollama) |
 | `/think off` | Disable thinking mode |
 | `/new` | Start a new session |
+| `/remember <text>` | Save text directly to today's short memory (`auto_short.md`) |
+| `/remember! <text>` | Save text directly to permanent notes (`notes.md`) |
 | `/exit` | Exit the chat |
 
 Ctrl+J inserts a newline. Enter submits.

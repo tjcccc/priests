@@ -213,11 +213,13 @@ async def _run_single(
 
 _CHAT_HELP = """\
 [bold]Chat commands:[/bold]
-  [bold]/exit[/bold]         Exit the chat.
-  [bold]/think on[/bold]     Enable thinking mode (if model supports it).
-  [bold]/think off[/bold]    Disable thinking mode.
-  [bold]/new[/bold]          Start a new session.
-  [bold]/help[/bold]         Show this message.\
+  [bold]/exit[/bold]              Exit the chat.
+  [bold]/think on[/bold]          Enable thinking mode (if model supports it).
+  [bold]/think off[/bold]         Disable thinking mode.
+  [bold]/new[/bold]               Start a new session.
+  [bold]/remember[/bold] [dim]<text>[/dim]   Save text to today's short memory (auto_short.md).
+  [bold]/remember![/bold] [dim]<text>[/dim]  Save text to permanent notes (notes.md).
+  [bold]/help[/bold]              Show this message.\
 """
 
 
@@ -240,7 +242,8 @@ async def _run_chat(
     from priests.memory.extractor import (
         StreamingStripper, clean_last_turn,
         append_memories, apply_consolidation, trim_memories, needs_consolidation,
-        mark_consolidated,
+        mark_consolidated, _append_to_file, _append_to_auto_short,
+        NOTES_FILE, AUTO_FILE,
     )
     from priests.profile.config import load_profile_config
 
@@ -322,6 +325,28 @@ async def _run_chat(
                     sid = str(uuid.uuid4())
                     session_ref = SessionRef(id=sid, create_if_missing=True)
                     console.print(f"[dim]New session: {sid}[/dim]")
+                    continue
+
+                elif raw.lower().startswith("/remember! "):
+                    content = raw[len("/remember! "):].strip()
+                    if not content:
+                        err_console.print("[yellow]Usage:[/yellow] /remember! <text>")
+                    elif not memories_on:
+                        err_console.print("[yellow]Memories are disabled for this profile.[/yellow]")
+                    else:
+                        _append_to_file(memories_dir / NOTES_FILE, content)
+                        console.print("[dim]Saved to notes.md.[/dim]")
+                    continue
+
+                elif raw.lower().startswith("/remember "):
+                    content = raw[len("/remember "):].strip()
+                    if not content:
+                        err_console.print("[yellow]Usage:[/yellow] /remember <text>")
+                    elif not memories_on:
+                        err_console.print("[yellow]Memories are disabled for this profile.[/yellow]")
+                    else:
+                        _append_to_auto_short(memories_dir / AUTO_FILE, content)
+                        console.print("[dim]Saved to auto_short.md.[/dim]")
                     continue
 
                 else:
