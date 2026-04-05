@@ -385,7 +385,7 @@ wheels = [
 
 [[package]]
 name = "priest-core"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "../priest" }
 dependencies = [
     { name = "aiosqlite" },
@@ -412,7 +412,7 @@ dev = [
 
 [[package]]
 name = "priests"
-version = "0.4.4"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
