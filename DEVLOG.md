@@ -1,5 +1,28 @@
 # DEVLOG
 
+## 2026-04-05 — v0.5.0 memory system redesign + CLI refactor
+
+**Memory system redesign:**
+- Replaced scattered `auto_{YYYYMMDD}.md` files with single rolling `auto_short.md` (dated `## YYYY-MM-DD` sections)
+- Added `user.md` (permanent user facts) and `notes.md` (role constraints) as separate long-term memory files
+- `memory.limit` (file count) → `memory.size_limit` (character count, default 50000); `trim_memories` drops oldest dated sections
+- Per-turn `<memory_append>{"user":…, "notes":…, "auto_short":…}</memory_append>` block: model appends new facts before streaming response
+- First-turn consolidation: if any memory file newer than `.last_consolidated` sentinel, model outputs `<memory_consolidation>` block to rewrite all three files; sentinel touched after all writes so it doesn't re-trigger every session
+- `StreamingStripper` rewritten as explicit state machine (replaces regex approach that failed on tag variations); handles both block types, strips from output, captures JSON
+- `apply_consolidation` always writes files when key is present (empty string clears); normalizes `auto_short` to dated section format if model omits headers
+- Memory instruction in system prompt improved: explicit field scopes, third-person perspective rule, "when in doubt → auto_short" tiebreaker
+
+**CLI refactor:**
+- All command groups renamed to singular (`providers` → `provider`)
+- Removed `_DefaultRunGroup` shortcut; bare `priests "text"` now errors (`no_args_is_help=True`)
+- `--think` and `--memories` changed from bool flags to `str | None` value options with `_parse_bool()`; one-shot defaults `memories=False`
+- `priests profile`, `priests model`, `priests provider` bare invocations show current value
+- `priests profile init` prompts for name if omitted
+- `priests provider <name> list` dynamic routing via `_ProviderGroup(TyperGroup)`
+- `priests profile init` and `_bootstrap_profiles` scaffold `memories/user.md`, `memories/notes.md`, `memories/auto_short.md`; `## Memory` section removed from user-editable `RULES.md` stub
+
+---
+
 ## Future milestones
 
 ### Other deferred items

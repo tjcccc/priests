@@ -76,7 +76,7 @@ class ModelsConfig(BaseModel):
 
 
 class MemoryConfig(BaseModel):
-    limit: int = 50  # max auto_*.md files to keep per profile; 0 = unlimited
+    size_limit: int = 50000  # max characters in auto_short.md; 0 = unlimited
 
 
 class AppConfig(BaseModel):

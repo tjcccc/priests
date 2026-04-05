@@ -16,49 +16,13 @@ from priests.config.model import AppConfig
 _PRIESTS_MD = "PRIESTS.md"
 
 _PRIESTS_MD_DEFAULT = """\
-# Memory System
+# priests
 
-You have a persistent memory system with three categories. Saved facts are loaded
-automatically at the start of every future session. Without a tag, information is
-forgotten when the session ends.
+You are running inside the priests AI dispatch system.
+Your profile (PROFILE.md, RULES.md, CUSTOM.md) defines your identity and role.
+Your memory files (user.md, notes.md, auto_short.md) carry persistent facts across sessions.
 
-## Memory categories
-
-| Type | Tag | File | Use for |
-|------|-----|------|---------|
-| auto (default) | `<memory>` | daily log | casual observations, conversation context |
-| user | `<memory type="user">` | user profile | stable facts about the user: name, preferences, background |
-| note | `<memory type="note">` | notes | role-defined important things: birthdays, key constraints, etc. |
-
-## How to save
-
-Append memory tags at the END of your normal conversational reply. The tags are
-extracted automatically and never shown to the user.
-
-Example — user says "Hi, I'm Sam, I love hiking.":
-  Your reply: "Hey Sam! Hiking sounds fun. <memory type="user">The user's name is Sam.</memory> <memory type="user">The user loves hiking.</memory>"
-
-Example — casual observation:
-  Your reply: "Got it! <memory>The user seems to be in a hurry today.</memory>"
-
-Format rules:
-- Always start the fact with "The user" so it is unambiguous across sessions
-- One short factual sentence per tag; multiple tags per reply are fine
-- Tags go at the end of your reply, after your conversational text
-- Never replace your reply with a tag alone — always write a natural response first
-- Never emit a tag when the value is unknown — no placeholders like [Name] or [Unknown]
-- Only save facts about the human user — never tag your own name, traits, or statements
-- If the user says "remember this" or "记住这个", always save it
-
-## What is worth saving
-
-Your profile's role and character — defined in PROFILE.md and RULES.md — determine
-what categories to use and what is meaningful to remember.
-
-## Using memories
-
-At the start of each session, read your loaded memories and respond accordingly.
-If you know the user's name, use it. Reflect their known preferences naturally.
+Memory instructions for each session are provided dynamically in the system context.
 """
 
 
@@ -70,17 +34,24 @@ def _bootstrap_profiles(profiles_root: Path) -> None:
         (default_dir / "PROFILE.md").write_text(IDENTITY)
         (default_dir / "RULES.md").write_text(RULES)
         (default_dir / "CUSTOM.md").write_text("")
-        (default_dir / "memories").mkdir()
+        _scaffold_memories(default_dir / "memories")
 
-    # Bootstrap profile.toml — handles v0.2 upgrade for existing installs.
+    # Bootstrap profile.toml — handles upgrade for existing installs.
     profile_toml = default_dir / "profile.toml"
     if not profile_toml.exists():
         profile_toml.write_text("memories = true\n")
 
-    # Bootstrap PRIESTS.md unconditionally — handles v0.1 → v0.2 upgrade.
+    # Always overwrite PRIESTS.md to keep it current across upgrades.
     guide_path = profiles_root.parent / _PRIESTS_MD
-    if not guide_path.exists():
-        guide_path.write_text(_PRIESTS_MD_DEFAULT)
+    guide_path.write_text(_PRIESTS_MD_DEFAULT)
+
+
+def _scaffold_memories(memories_dir: Path) -> None:
+    """Create the standard memory file stubs in a profile's memories directory."""
+    memories_dir.mkdir(parents=True, exist_ok=True)
+    (memories_dir / "user.md").write_text("# User\n\n")
+    (memories_dir / "notes.md").write_text("# Notes\n\n")
+    (memories_dir / "auto_short.md").write_text("# Short Memories\n\n")
 
 
 def load_global_guide(config: AppConfig) -> str | None:

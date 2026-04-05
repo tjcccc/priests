@@ -21,6 +21,20 @@ model_app = typer.Typer(help="Manage model defaults and provider setup.")
 console = Console()
 err_console = Console(stderr=True)
 
+
+@model_app.callback(invoke_without_command=True)
+def model_root(
+    ctx: typer.Context,
+    config_file: Annotated[Path | None, typer.Option("--config", help="Path to priests.toml.")] = None,
+) -> None:
+    """Show the current default model, or run a subcommand."""
+    if ctx.invoked_subcommand is not None:
+        return
+    config = load_config(config_file)
+    provider = config.default.provider or "(none)"
+    model = config.default.model or "(none)"
+    console.print(f"Current model: {provider}/{model}")
+
 _ADD_NEW = "__add_new__"
 
 
