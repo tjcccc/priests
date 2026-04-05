@@ -38,26 +38,29 @@ Walks you through selecting a provider, entering an API key, picking a model, an
 # Interactive chat
 priests run
 
-# Single prompt (three equivalent forms)
-priests "your prompt"
+# Single prompt
 priests run "your prompt"
-priests run --prompt "your prompt"
 
 # With options
 priests run --provider bailian --model qwen-plus --profile friend --session my-session
+priests run "your prompt" --think true --memories false
 
 # Model management
-priests model list               # list saved models, shows current default
+priests model                    # show current default model
+priests model list               # list saved models
 priests model default            # interactively pick a new default
 priests model add                # add a new provider + model
 
 # Provider info
-priests providers                # list all providers with configured status
-priests providers models <name>  # show known models for a provider
+priests provider                 # show current provider
+priests provider list            # list all providers with configured status
+priests provider <name> list     # show known models for a provider
 
 # Profile management
+priests profile                  # show current profile
 priests profile list
-priests profile init "my_profile"
+priests profile init             # prompts for name
+priests profile init my_profile
 
 # Config
 priests config show
@@ -145,7 +148,7 @@ base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
 use_proxy = true
 
 [memory]
-limit = 50  # max daily auto memory files to keep per profile; 0 = unlimited
+size_limit = 50000  # max characters in auto_short.md; 0 = unlimited
 ```
 
 ### Proxy
@@ -169,11 +172,11 @@ profiles/
     PROFILE.md      # identity and persona
     RULES.md        # behavior and constraints (plain language)
     CUSTOM.md       # user customization
-    profile.toml    # per-profile settings (memories on/off, limit)
+    profile.toml    # per-profile settings (memories on/off)
     memories/       # persistent memory files written automatically
-      user.md           # stable facts about the user
-      notes.md          # role-important things (birthdays, goals, etc.)
-      auto_YYYYMMDD.md  # daily observations and conversation context
+      user.md           # stable facts about the user (permanent)
+      notes.md          # role constraints and behavioural context (permanent)
+      auto_short.md     # time-sensitive observations, tasks, reminders (rolling)
 ```
 
 Create a new profile:
@@ -196,30 +199,26 @@ For tool profiles that don't need memory (formatters, dictionaries, etc.), set `
 memories = false
 ```
 
-Override the global memory limit for a specific profile:
-
-```toml
-memories_limit = 100
-```
-
 ## Memory system
 
-priests uses a model-driven memory system. After each turn, memory tags emitted by the model are extracted and written to the profile's `memories/` directory. These files are loaded automatically at the start of every future session.
+priests uses a model-driven memory system. After each turn the model emits a structured block before its response; priests extracts it and writes the content to the profile's `memories/` directory. These files are loaded automatically at the start of every future session.
 
-Three memory categories are routed to separate files:
+Three files serve different scopes:
 
-| Tag | File | Use for |
-|-----|------|---------|
-| `<memory type="user">` | `user.md` | Stable facts: name, hobbies, preferences |
-| `<memory type="note">` | `notes.md` | Role-important things: birthdays, goals, key constraints |
-| `<memory>` | `auto_YYYYMMDD.md` | Daily observations and session context |
+| File | Use for |
+|------|---------|
+| `user.md` | Stable facts about the user (name, background, permanent preferences) |
+| `notes.md` | Behavioural constraints for the profile role |
+| `auto_short.md` | Time-sensitive observations, tasks, reminders — rolling, trimmed by `size_limit` |
 
-The model decides what is worth remembering based on the profile's character. No configuration is required — the behavior is guided by `~/.priests/PRIESTS.md`, which is bootstrapped automatically on first run.
+`auto_short.md` uses dated sections (`## YYYY-MM-DD`). Oldest sections are dropped automatically once the file exceeds `memory.size_limit` characters.
 
-To disable memory for a session:
+At the start of a session, if any memory file has changed since the last run, the model consolidates all three files before responding — removing redundant or outdated facts.
+
+To disable memory for a single run:
 
 ```bash
-priests run --no-memories
+priests run --memories false
 ```
 
 To disable permanently for a profile, set `memories = false` in `profile.toml`.
