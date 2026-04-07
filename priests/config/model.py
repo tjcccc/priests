@@ -76,7 +76,12 @@ class ModelsConfig(BaseModel):
 
 
 class MemoryConfig(BaseModel):
-    size_limit: int = 50000  # max characters in auto_short.md; 0 = unlimited
+    size_limit: int = 50000   # max characters in auto_short.md on disk; 0 = unlimited
+    context_limit: int = 0    # max combined characters of all three memory files
+                              # injected into the system prompt per turn; 0 = unlimited.
+                              # When exceeded, auto_short sections are dropped
+                              # oldest-first until the block fits. user.md and notes.md
+                              # are never truncated at injection time.
 
 
 class AppConfig(BaseModel):

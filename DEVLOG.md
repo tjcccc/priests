@@ -1,5 +1,32 @@
 # DEVLOG
 
+## TODO
+
+- **Memory system → 9/10:** Add a soft on-disk line cap for `user.md`/`notes.md` enforced during consolidation (via the consolidation prompt hint, similar to how `size_limit` hints `auto_short` trimming). Revisit whether memory files should also be injected on normal non-consolidation turns.
+- **Web search feature:** Add `web_search` capability.
+
+---
+
+## 2026-04-07 — v0.6.0 memory system hardening + test suite
+
+**Memory system improvements (6.5 → 8/10):**
+
+- `deduplicate_file(path) -> bool` — new public function in `extractor.py`. Strips exact duplicate lines from `user.md` / `notes.md` at session start (case-insensitive, preserves first occurrence and blank lines, skips write if nothing changed to avoid mtime churn)
+- `MemoryConfig.context_limit: int = 0` — new config field. Caps the combined character size of all three memory files injected into the system prompt per turn. When exceeded, `auto_short` sections are dropped oldest-first; `user.md` and `notes.md` are never truncated at injection time
+- `_truncate_auto_short` — private helper in `run_cmd.py` that drops complete `## YYYY-MM-DD` sections oldest-first, with a hard tail-truncation fallback for single-section edge cases
+- Fixed `trim_memories` bug: `while dated` → `while len(dated) > 1` — the last dated section was being silently dropped when the file exceeded `size_limit`
+- Fixed dedup ordering: `deduplicate_file` now runs **before** `needs_consolidation` in both `_run_single` and `_run_chat`, so a dedup write does not falsely trigger consolidation on the next session
+
+**Test suite:**
+- `tests/bench_memory.py` — 13 performance benchmarks (existing)
+- `tests/test_memory.py` — 31 correctness tests covering all public functions: `append_memories`, `apply_consolidation`, `trim_memories`, `needs_consolidation`, `deduplicate_file`, `clean_last_turn`, `StreamingStripper`, `_build_memory_context` context cap, and dedup/sentinel ordering interaction
+
+**Deferred (TODO):**
+- Memory system → 9/10: soft on-disk line cap for `user.md`/`notes.md` via consolidation prompt hint; revisit memory injection on non-consolidation turns
+- Web search feature
+
+---
+
 ## 2026-04-05 — v0.5.0 memory system redesign + CLI refactor
 
 **Memory system redesign:**

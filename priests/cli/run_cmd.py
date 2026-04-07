@@ -65,9 +65,59 @@ def _load_mem(path: Path) -> str:
     return path.read_text(encoding="utf-8").strip() if path.exists() else ""
 
 
-def _build_memory_context(memories_dir: Path, size_limit: int, consolidate: bool) -> str:
+def _truncate_auto_short(content: str, max_chars: int) -> str:
+    """Return a version of content that fits within max_chars.
+
+    Drops complete ## YYYY-MM-DD sections oldest-first until it fits.
+    Never drops the last remaining section — callers must handle the case where
+    even the trimmed result exceeds max_chars.
+    Falls back to a raw tail-truncation only if no dated sections are found.
+    """
+    import re
+
+    if len(content) <= max_chars:
+        return content
+    sections = re.split(r"(?=\n## \d{4}-\d{2}-\d{2})", content)
+    if len(sections) <= 1:
+        # No dated sections — fall back to keeping the tail
+        return content[-max_chars:]
+    intro, dated = sections[0], list(sections[1:])
+    if len(dated) <= 1:
+        # Single dated section — never drop it
+        return content
+    while len(dated) > 1:
+        if len(intro + "".join(dated)) <= max_chars:
+            break
+        dated.pop(0)  # drop oldest section
+    return intro + "".join(dated)
+
+
+def _build_memory_context(
+    memories_dir: Path,
+    size_limit: int,
+    consolidate: bool,
+    context_limit: int = 0,
+) -> str:
     """Build the memory system prompt block for a turn."""
     from priests.memory.extractor import USER_FILE, NOTES_FILE, AUTO_FILE
+
+    # Pre-load all three files so we can apply the context cap before building parts.
+    user_content  = _load_mem(memories_dir / USER_FILE)
+    notes_content = _load_mem(memories_dir / NOTES_FILE)
+    auto_content  = _load_mem(memories_dir / AUTO_FILE)
+
+    if context_limit > 0:
+        fixed = len(user_content) + len(notes_content)
+        available = context_limit - fixed
+        if available <= 0:
+            auto_content = ""
+        else:
+            auto_content = _truncate_auto_short(auto_content, available)
+            # _truncate_auto_short never drops the last section even if it still
+            # exceeds available. Apply a hard tail-truncation as a final safety
+            # net so context_limit is always honoured.
+            if len(auto_content) > available:
+                auto_content = auto_content[-available:]
 
     parts: list[str] = []
 
@@ -90,11 +140,11 @@ def _build_memory_context(memories_dir: Path, size_limit: int, consolidate: bool
             f" keep each file focused on its purpose, and output the result BEFORE your"
             f" response.{size_hint}\n\n"
             f"**user.md** (permanent facts about who the user is):\n"
-            f"{_load_mem(memories_dir / USER_FILE) or '(empty)'}\n\n"
+            f"{user_content or '(empty)'}\n\n"
             f"**notes.md** (permanent behavioural constraints for your role):\n"
-            f"{_load_mem(memories_dir / NOTES_FILE) or '(empty)'}\n\n"
+            f"{notes_content or '(empty)'}\n\n"
             f"**auto_short.md** (time-sensitive tasks, reminders, short-lived context):\n"
-            f"{_load_mem(memories_dir / AUTO_FILE) or '(empty)'}\n\n"
+            f"{auto_content or '(empty)'}\n\n"
             f"{_mem_guide}\n\n"
             f"Output ONLY the consolidation block. Include ALL three keys — use an empty"
             f" string to clear a file that should be empty after consolidation:\n\n"
@@ -134,7 +184,7 @@ async def _run_single(
     from priests.memory.extractor import (
         StreamingStripper, clean_last_turn,
         append_memories, apply_consolidation, trim_memories, needs_consolidation,
-        mark_consolidated,
+        mark_consolidated, deduplicate_file, USER_FILE, NOTES_FILE,
     )
     from priests.profile.config import load_profile_config
 
@@ -151,8 +201,15 @@ async def _run_single(
         system_context = [guide, *system_context]
     consolidate = False
     if memories:
+        # Dedup runs before needs_consolidation so the sentinel check reflects
+        # the post-dedup state. A dedup write would otherwise bump mtime and
+        # falsely trigger consolidation on the next session.
+        deduplicate_file(memories_dir / USER_FILE)
+        deduplicate_file(memories_dir / NOTES_FILE)
         consolidate = needs_consolidation(memories_dir)
-        system_context.append(_build_memory_context(memories_dir, size_limit, consolidate))
+        system_context.append(
+            _build_memory_context(memories_dir, size_limit, consolidate, config.memory.context_limit)
+        )
 
     session_ref = None
     if session_id:
@@ -242,8 +299,8 @@ async def _run_chat(
     from priests.memory.extractor import (
         StreamingStripper, clean_last_turn,
         append_memories, apply_consolidation, trim_memories, needs_consolidation,
-        mark_consolidated, _append_to_file, _append_to_auto_short,
-        NOTES_FILE, AUTO_FILE,
+        mark_consolidated, deduplicate_file, _append_to_file, _append_to_auto_short,
+        USER_FILE, NOTES_FILE, AUTO_FILE,
     )
     from priests.profile.config import load_profile_config
 
@@ -275,6 +332,12 @@ async def _run_chat(
 
     prompt_session: PromptSession[str] = PromptSession(key_bindings=_chat_kb)
 
+    # Dedup runs before needs_consolidation so the sentinel check reflects the
+    # post-dedup state. A dedup write would otherwise bump mtime and falsely
+    # trigger consolidation on the next session.
+    if memories_on:
+        deduplicate_file(memories_dir / USER_FILE)
+        deduplicate_file(memories_dir / NOTES_FILE)
     # Consolidation triggers once per session start if memories changed.
     consolidation_needed = memories_on and needs_consolidation(memories_dir)
     consolidation_done = False
@@ -356,7 +419,9 @@ async def _run_chat(
             # --- Build turn system context ---
             do_consolidate = consolidation_needed and not consolidation_done
             if memories_on:
-                turn_context = [*system_context_base, _build_memory_context(memories_dir, size_limit, do_consolidate)]
+                turn_context = [*system_context_base, _build_memory_context(
+                    memories_dir, size_limit, do_consolidate, config.memory.context_limit
+                )]
             else:
                 turn_context = system_context_base
 

@@ -253,7 +253,9 @@ def trim_memories(memories_dir: Path, size_limit: int) -> None:
         return
 
     intro, dated = sections[0], sections[1:]
-    while dated and len(intro + "".join(dated)) > size_limit:
+    # Never drop the last remaining section — leave something readable rather
+    # than a bare header. The caller (consolidation) can compact it further.
+    while len(dated) > 1 and len(intro + "".join(dated)) > size_limit:
         dated.pop(0)
 
     path.write_text(intro + "".join(dated), encoding="utf-8")
@@ -275,6 +277,37 @@ def needs_consolidation(memories_dir: Path) -> bool:
 def mark_consolidated(memories_dir: Path) -> None:
     """Touch .last_consolidated to record that consolidation just ran."""
     (memories_dir / SENTINEL_FILE).touch()
+
+
+def deduplicate_file(path: Path) -> bool:
+    """Remove exact duplicate lines from a flat memory file (user.md / notes.md).
+
+    Preserves first occurrence and insertion order. Blank lines are always kept
+    (they provide formatting structure). Comparison is case-insensitive and
+    strip()-normalised so minor casing variations are treated as duplicates.
+
+    Returns True if the file was modified (and rewritten), False otherwise.
+    Does not raise if the file is absent — returns False silently.
+    """
+    if not path.exists():
+        return False
+    original = path.read_text(encoding="utf-8")
+    seen: set[str] = set()
+    result: list[str] = []
+    for line in original.splitlines(keepends=True):
+        key = line.strip().lower()
+        if not key:          # blank line — always keep, never deduplicated
+            result.append(line)
+            continue
+        if key in seen:
+            continue         # duplicate — drop silently
+        seen.add(key)
+        result.append(line)
+    deduped = "".join(result)
+    if deduped == original:
+        return False         # nothing changed — skip write so mtime is not updated
+    path.write_text(deduped, encoding="utf-8")
+    return True
 
 
 # ---------------------------------------------------------------------------
