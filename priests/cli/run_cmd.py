@@ -95,10 +95,16 @@ def _truncate_auto_short(content: str, max_chars: int) -> str:
 def _build_memory_context(
     memories_dir: Path,
     size_limit: int,
+    flat_line_cap: int,
     consolidate: bool,
     context_limit: int = 0,
 ) -> str:
-    """Build the memory system prompt block for a turn."""
+    """Build the memory system prompt block for a turn.
+
+    On consolidation turns the model receives the full file contents with
+    instructions to rewrite them. On all other turns the model still receives
+    the loaded contents so it can recall saved facts, plus the append instruction.
+    """
     from priests.memory.extractor import USER_FILE, NOTES_FILE, AUTO_FILE
 
     # Pre-load all three files so we can apply the context cap before building parts.
@@ -135,10 +141,15 @@ def _build_memory_context(
 
     if consolidate:
         size_hint = f" Trim auto_short to under {size_limit} characters." if size_limit > 0 else ""
+        flat_hint = (
+            f" Keep user.md and notes.md under {flat_line_cap} lines each."
+            if flat_line_cap > 0
+            else " Keep user.md and notes.md concise — remove redundant or outdated entries."
+        )
         parts.append(
             f"Your memory files need consolidation. Remove redundant or outdated facts,"
             f" keep each file focused on its purpose, and output the result BEFORE your"
-            f" response.{size_hint}\n\n"
+            f" response.{size_hint}{flat_hint}\n\n"
             f"**user.md** (permanent facts about who the user is):\n"
             f"{user_content or '(empty)'}\n\n"
             f"**notes.md** (permanent behavioural constraints for your role):\n"
@@ -152,6 +163,18 @@ def _build_memory_context(
             f'{{\"user\": \"...\", \"notes\": \"...\", \"auto_short\": \"...\"}}\n'
             f"</memory_consolidation>"
         )
+    else:
+        # On non-consolidation turns, still inject loaded memories so the model
+        # can recall saved facts throughout the session.
+        if user_content or notes_content or auto_content:
+            memo: list[str] = []
+            if user_content:
+                memo.append(f"**About the user (user.md):**\n{user_content}")
+            if notes_content:
+                memo.append(f"**Behavioural notes (notes.md):**\n{notes_content}")
+            if auto_content:
+                memo.append(f"**Recent context (auto_short.md):**\n{auto_content}")
+            parts.append("## Loaded Memories\n\n" + "\n\n".join(memo))
 
     parts.append(
         "If anything from this conversation is worth remembering, output it BEFORE "
@@ -208,7 +231,7 @@ async def _run_single(
         deduplicate_file(memories_dir / NOTES_FILE)
         consolidate = needs_consolidation(memories_dir)
         system_context.append(
-            _build_memory_context(memories_dir, size_limit, consolidate, config.memory.context_limit)
+            _build_memory_context(memories_dir, size_limit, config.memory.flat_line_cap, consolidate, config.memory.context_limit)
         )
 
     session_ref = None
@@ -274,6 +297,7 @@ _CHAT_HELP = """\
   [bold]/think on[/bold]          Enable thinking mode (if model supports it).
   [bold]/think off[/bold]         Disable thinking mode.
   [bold]/new[/bold]               Start a new session.
+  [bold]/search[/bold] [dim]<query>[/dim]    Run a web search; results are injected into the next message.
   [bold]/remember[/bold] [dim]<text>[/dim]   Save text to today's short memory (auto_short.md).
   [bold]/remember![/bold] [dim]<text>[/dim]  Save text to permanent notes (notes.md).
   [bold]/help[/bold]              Show this message.\
@@ -319,6 +343,11 @@ async def _run_chat(
 
     guide = load_global_guide(config)
     system_context_base = ["Running inside priests CLI."]
+    if config.web_search.enabled:
+        system_context_base.append(
+            "The user has a /search <query> command available to run web searches. "
+            "You can ask them to search if current information would help."
+        )
     if guide:
         system_context_base = [guide, *system_context_base]
 
@@ -341,6 +370,9 @@ async def _run_chat(
     # Consolidation triggers once per session start if memories changed.
     consolidation_needed = memories_on and needs_consolidation(memories_dir)
     consolidation_done = False
+
+    # Pending web search results to inject into the next user message.
+    _search_context: str | None = None
 
     _BOLD = "\033[1m"
     _RESET = "\033[0m"
@@ -387,7 +419,32 @@ async def _run_chat(
                 elif cmd == "/new":
                     sid = str(uuid.uuid4())
                     session_ref = SessionRef(id=sid, create_if_missing=True)
+                    # Reset consolidation state so the new session can trigger
+                    # consolidation if memory files changed during the previous one.
+                    if memories_on:
+                        deduplicate_file(memories_dir / USER_FILE)
+                        deduplicate_file(memories_dir / NOTES_FILE)
+                        consolidation_needed = needs_consolidation(memories_dir)
+                    consolidation_done = False
                     console.print(f"[dim]New session: {sid}[/dim]")
+                    continue
+
+                elif raw.lower().startswith("/search "):
+                    query = raw[len("/search "):].strip()
+                    if not query:
+                        err_console.print("[yellow]Usage:[/yellow] /search <query>")
+                    elif not config.web_search.enabled:
+                        err_console.print("[yellow]Web search is disabled in priests.toml.[/yellow]")
+                    else:
+                        console.print(f"[dim]Searching: {query}…[/dim]")
+                        try:
+                            from priests.search import search as _do_search
+                            _search_context = _do_search(query, config.web_search.max_results)
+                            console.print("[dim]Results ready — they will be included in your next message.[/dim]")
+                        except RuntimeError as e:
+                            err_console.print(f"[red]{escape(str(e))}[/red]")
+                        except Exception as e:
+                            err_console.print(f"[red]Search failed:[/red] {escape(str(e))}")
                     continue
 
                 elif raw.lower().startswith("/remember! "):
@@ -420,18 +477,24 @@ async def _run_chat(
             do_consolidate = consolidation_needed and not consolidation_done
             if memories_on:
                 turn_context = [*system_context_base, _build_memory_context(
-                    memories_dir, size_limit, do_consolidate, config.memory.context_limit
+                    memories_dir, size_limit, config.memory.flat_line_cap, do_consolidate, config.memory.context_limit
                 )]
             else:
                 turn_context = system_context_base
 
             # --- Normal prompt ---
+            extra_context: list[str] = []
+            if _search_context:
+                extra_context.append(_search_context)
+                _search_context = None
+
             request = PriestRequest(
                 config=priest_config,
                 profile=profile,
                 prompt=raw,
                 session=session_ref,
                 system_context=turn_context,
+                extra_context=extra_context,
             )
 
             header_printed = False

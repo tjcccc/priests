@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 class ProfileConfig(BaseModel):
     memories: bool = True
-    memories_limit: int | None = None  # overrides global [memory].limit when set
+    memories_limit: int | None = None  # overrides global [memory].size_limit when set
 
 
 def load_profile_config(profiles_dir: Path, profile: str) -> ProfileConfig:

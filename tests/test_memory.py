@@ -354,7 +354,7 @@ def test_build_memory_context_truncates_auto_short_when_over_limit(tmp_path):
     context_limit = len("user fact") + len("notes fact") + 250
 
     # consolidate=True is required — that's when file contents are injected
-    result = _build_memory_context(tmp_path, 50000, True, context_limit)
+    result = _build_memory_context(tmp_path, 50000, 0, True, context_limit)
 
     assert "user fact" in result
     assert "notes fact" in result
@@ -376,7 +376,7 @@ def test_build_memory_context_single_oversized_section_hard_truncated(tmp_path):
 
     context_limit = 300  # user(100) + notes(100) = 200 fixed; 100 left for auto
 
-    result = _build_memory_context(tmp_path, 50000, True, context_limit)
+    result = _build_memory_context(tmp_path, 50000, 0, True, context_limit)
 
     assert "u" * 100 in result
     assert "n" * 100 in result
@@ -395,7 +395,7 @@ def test_build_memory_context_zero_limit_injects_all(tmp_path):
         "# Short Memories\n\n## 2026-01-01\n\n" + "detail " * 100
     )
 
-    result = _build_memory_context(tmp_path, 50000, True, 0)
+    result = _build_memory_context(tmp_path, 50000, 0, True, 0)
 
     assert "user fact" in result
     assert "detail " * 5 in result  # bulk of auto_short content present

@@ -75,6 +75,11 @@ class ModelsConfig(BaseModel):
     options: list[str] = Field(default_factory=list)  # stored as "provider/model"
 
 
+class WebSearchConfig(BaseModel):
+    enabled: bool = True
+    max_results: int = 5
+
+
 class MemoryConfig(BaseModel):
     size_limit: int = 50000   # max characters in auto_short.md on disk; 0 = unlimited
     context_limit: int = 0    # max combined characters of all three memory files
@@ -82,6 +87,8 @@ class MemoryConfig(BaseModel):
                               # When exceeded, auto_short sections are dropped
                               # oldest-first until the block fits. user.md and notes.md
                               # are never truncated at injection time.
+    flat_line_cap: int = 0    # soft line cap for user.md and notes.md, enforced during
+                              # consolidation via a prompt hint. 0 = no hint.
 
 
 class AppConfig(BaseModel):
@@ -91,4 +98,5 @@ class AppConfig(BaseModel):
     service: ServiceConfig = Field(default_factory=ServiceConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     proxy: ProxyConfig | None = None

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
@@ -7,11 +9,26 @@ from fastapi import APIRouter, HTTPException, Request
 from priest import PriestConfig, PriestRequest, PriestResponse, SessionRef
 from priests.config.model import AppConfig
 from priests.engine_factory import load_global_guide
-from priests.memory.extractor import clean_last_turn, extract_memories, strip_memory_tags, write_memories, trim_memories
+from priests.memory.extractor import (
+    append_memories,
+    apply_consolidation,
+    clean_last_turn,
+    mark_consolidated,
+    trim_memories,
+)
 from priests.profile.config import load_profile_config
 from priests.service.schemas import RunRequest
 
 router = APIRouter()
+
+_APPEND_RE = re.compile(r"<memory_append>(.*?)</memory_append>", re.DOTALL | re.IGNORECASE)
+_CONSOLIDATION_RE = re.compile(r"<memory_consolidation>(.*?)</memory_consolidation>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_memory_blocks(text: str) -> str:
+    text = _APPEND_RE.sub("", text)
+    text = _CONSOLIDATION_RE.sub("", text)
+    return text
 
 
 def _build_priest_request(body: RunRequest, config: AppConfig, guide: str | None = None) -> PriestRequest:
@@ -56,19 +73,32 @@ async def _apply_memory(
     store,
     memories: bool = True,
 ) -> PriestResponse:
-    """Strip tags from session store, extract memories, write to disk, strip tags from response text."""
+    """Strip memory blocks from session store, persist to disk, and strip blocks from response text."""
     if response.session:
         await clean_last_turn(store, response.session.id)
+    text = response.text or ""
     if memories:
         profile_cfg = load_profile_config(config.paths.profiles_dir, body.profile)
         if profile_cfg.memories:
-            facts = extract_memories(response.text or "")
-            if facts:
-                mem_limit = profile_cfg.memories_limit if profile_cfg.memories_limit is not None else config.memory.limit
-                memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
-                write_memories(memories_dir, facts)
-                trim_memories(memories_dir, mem_limit)
-    return response.model_copy(update={"text": strip_memory_tags(response.text or "")})
+            size_limit = (
+                profile_cfg.memories_limit
+                if profile_cfg.memories_limit is not None
+                else config.memory.size_limit
+            )
+            memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
+            if m := _CONSOLIDATION_RE.search(text):
+                try:
+                    apply_consolidation(memories_dir, json.loads(m.group(1).strip()))
+                    mark_consolidated(memories_dir)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            if m := _APPEND_RE.search(text):
+                try:
+                    append_memories(memories_dir, json.loads(m.group(1).strip()))
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            trim_memories(memories_dir, size_limit)
+    return response.model_copy(update={"text": _strip_memory_blocks(text)})
 
 
 @router.post("/run", response_model=PriestResponse)

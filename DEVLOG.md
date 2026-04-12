@@ -2,8 +2,20 @@
 
 ## TODO
 
-- **Memory system → 9/10:** Add a soft on-disk line cap for `user.md`/`notes.md` enforced during consolidation (via the consolidation prompt hint, similar to how `size_limit` hints `auto_short` trimming). Revisit whether memory files should also be injected on normal non-consolidation turns.
-- **Web search feature:** Add `web_search` capability.
+- **Auto-search agentic loop:** Model emits `<search_query>…</search_query>` when it needs current info; CLI intercepts, runs search, cleans the search-intent turn from session history, re-prompts with results — transparent to the user.
+- **Service layer test coverage:** `TestClient`-based tests for `/run` and `/chat` routes with mocked engine and session store.
+
+---
+
+## 2026-04-12 — priest-core v1.0.0 migration + memory injection fix + web search
+
+- Switched `priest-core` dep from local editable path to `>=1.0.0` on PyPI; removed `[tool.uv.sources]`
+- Fixed `priests/service/routes/run.py`: replaced three stale imports (`extract_memories`, `strip_memory_tags`, `write_memories`) removed in v0.5.0 with current memory API
+- Fixed memory injection gap: `_build_memory_context` now injects `## Loaded Memories` on all non-consolidation turns (previously memories were only visible to the model during consolidation)
+- Added `MemoryConfig.flat_line_cap` — soft on-disk line cap for `user.md`/`notes.md` enforced via consolidation prompt hint
+- Fixed `/new` consolidation state bug: `consolidation_done` was not reset between sessions
+- Added `WebSearchConfig` (`enabled`, `max_results`) to `AppConfig`; `/search <query>` slash command in chat; results injected into `extra_context` on next turn; model notified via system prompt; powered by `ddgs` optional extra (`priests[search]`)
+- Added `tests/test_run_cmd.py`: 10 tests covering `_build_memory_context` non-consolidation branch, `flat_line_cap` hint, and `search()` function (41 total passing)
 
 ---
 
