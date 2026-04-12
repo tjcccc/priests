@@ -3,6 +3,8 @@
 ## TODO
 
 - **Auto-search agentic loop:** Model emits `<search_query>…</search_query>` when it needs current info; CLI intercepts, runs search, cleans the search-intent turn from session history, re-prompts with results — transparent to the user.
+- **Image support in service API:** Add `images: list[str]` (base64 or URLs) to `RunRequest`; pass through to `PriestRequest` once `priest-core` exposes an image field. Unblocked by `priest-core` upstream. CLI gets `/image <path>` slash command at the same time. Frontends can then send images via `/v1/run` and `/v1/chat` without priests needing its own UI.
+- **SSE streaming for service routes:** `/v1/run` and `/v1/chat` currently return full responses; add SSE variants so frontend clients get streamed output without polling.
 - **Service layer test coverage:** `TestClient`-based tests for `/run` and `/chat` routes with mocked engine and session store.
 
 ---
