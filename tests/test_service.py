@@ -189,7 +189,8 @@ def test_run_stream_yields_deltas(client):
     assert "text/event-stream" in resp.headers["content-type"]
     lines = [l for l in resp.text.splitlines() if l.startswith("data:")]
     payloads = [l[len("data: "):] for l in lines]
-    deltas = [json.loads(p)["delta"] for p in payloads if p != "[DONE]"]
+    parsed = [json.loads(p) for p in payloads if p != "[DONE]"]
+    deltas = [p["delta"] for p in parsed if "delta" in p]
     assert "".join(deltas) == "Hello world"
     assert payloads[-1] == "[DONE]"
 
@@ -210,9 +211,8 @@ def test_run_stream_filters_memory_blocks(client):
     assert resp.status_code == 200
     lines = [l for l in resp.text.splitlines() if l.startswith("data:")]
     payloads = [l[len("data: "):] for l in lines]
-    full_text = "".join(
-        json.loads(p)["delta"] for p in payloads if p != "[DONE]"
-    )
+    parsed = [json.loads(p) for p in payloads if p != "[DONE]"]
+    full_text = "".join(p["delta"] for p in parsed if "delta" in p)
     assert "<memory_append>" not in full_text
     assert "Answer." in full_text
 

@@ -20,6 +20,10 @@ export interface SessionDetail {
   turns: Turn[]
 }
 
+export interface StreamMeta {
+  model?: string
+}
+
 export async function fetchSessions(): Promise<SessionSummary[]> {
   const r = await fetch('/v1/sessions')
   if (!r.ok) throw new Error(`Failed to fetch sessions: ${r.status}`)
@@ -42,7 +46,7 @@ export interface ChatParams {
 export async function streamChat(
   params: ChatParams,
   onDelta: (delta: string) => void,
-  onDone: () => void,
+  onDone: (meta: StreamMeta) => void,
   onError: (msg: string) => void,
 ): Promise<void> {
   const body: Record<string, unknown> = {
@@ -73,6 +77,7 @@ export async function streamChat(
   const reader = r.body!.getReader()
   const decoder = new TextDecoder()
   let buf = ''
+  let collectedMeta: StreamMeta = {}
 
   while (true) {
     const { done, value } = await reader.read()
@@ -84,12 +89,15 @@ export async function streamChat(
       if (!line.startsWith('data: ')) continue
       const payload = line.slice(6)
       if (payload === '[DONE]') {
-        onDone()
+        onDone(collectedMeta)
         return
       }
       try {
         const obj = JSON.parse(payload) as Record<string, unknown>
         if (typeof obj.delta === 'string') onDelta(obj.delta)
+        if (obj.metadata && typeof obj.metadata === 'object') {
+          collectedMeta = { ...collectedMeta, ...(obj.metadata as StreamMeta) }
+        }
         if (obj.error && typeof obj.error === 'object') {
           const err = obj.error as Record<string, unknown>
           onError(String(err.message ?? 'Unknown error'))
@@ -98,5 +106,5 @@ export async function streamChat(
       } catch { /* ignore malformed SSE lines */ }
     }
   }
-  onDone()
+  onDone(collectedMeta)
 }

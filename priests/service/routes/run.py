@@ -196,6 +196,9 @@ async def _sse_generator(body: RunRequest, config: AppConfig, engine, store, mem
                     pass
             trim_memories(memories_dir, size_limit)
 
+    provider = priest_request.config.provider or "default"
+    model = priest_request.config.model or "default"
+    yield f"data: {json.dumps({'metadata': {'model': f'{provider}/{model}'}})}\n\n"
     yield "data: [DONE]\n\n"
 
 
