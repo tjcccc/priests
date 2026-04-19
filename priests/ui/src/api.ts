@@ -51,10 +51,19 @@ export interface StreamMeta {
   model?: string
 }
 
-export interface ImageAttachment {
-  data?: string
-  url?: string
-  media_type?: string
+export interface UploadResult {
+  uuid: string
+  url: string
+}
+
+export interface SessionUploadItem {
+  uuid: string
+  url: string
+  media_type: string
+}
+
+export interface SessionUploads {
+  by_turn: Record<string, SessionUploadItem[]>
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +108,31 @@ export async function putProfileEmoji(name: string, emoji: string): Promise<void
   })
 }
 
+export async function uploadImage(params: {
+  data: string
+  media_type: string
+  session_id: string
+  batch_id: string
+}): Promise<UploadResult> {
+  const r = await fetch('/v1/uploads', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  if (!r.ok) throw new Error(`Upload failed: ${r.status}`)
+  return r.json()
+}
+
+export async function fetchSessionUploads(sessionId: string): Promise<SessionUploads> {
+  try {
+    const r = await fetch(`/v1/sessions/${sessionId}/uploads`)
+    if (!r.ok) return { by_turn: {} }
+    return r.json()
+  } catch {
+    return { by_turn: {} }
+  }
+}
+
 export async function fetchModels(): Promise<ModelsConfig> {
   try {
     const r = await fetch('/v1/ui/models')
@@ -120,7 +154,7 @@ export interface ChatParams {
   no_think?: boolean
   provider?: string | null
   model?: string | null
-  images?: ImageAttachment[]
+  upload_uuids?: string[]
 }
 
 export async function streamChat(
@@ -138,7 +172,7 @@ export async function streamChat(
   if (params.session_id) body.session_id = params.session_id
   if (params.provider) body.provider = params.provider
   if (params.model) body.model = params.model
-  if (params.images?.length) body.images = params.images
+  if (params.upload_uuids?.length) body.upload_uuids = params.upload_uuids
 
   let r: Response
   try {

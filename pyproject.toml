@@ -20,6 +20,7 @@ dependencies = [
     "questionary>=2.0",
     "openai>=2.30.0",
     "ddgs>=9.14.0",
+    "pillow>=10.0",
 ]
 
 [dependency-groups]

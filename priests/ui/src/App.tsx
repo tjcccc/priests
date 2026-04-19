@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { marked } from 'marked'
 import {
   fetchSessions, fetchSession, fetchUIMeta, fetchModels,
-  putSessionTitle, putProfileEmoji, streamChat,
+  putSessionTitle, putProfileEmoji, streamChat, uploadImage, fetchSessionUploads,
   SessionSummary, UIMeta, ModelsConfig, StreamMeta,
 } from './api'
 
@@ -37,12 +37,15 @@ interface Message {
   timestamp: string
   model?: string
   elapsed_ms?: number
+  imagePreviews?: string[]  // /v1/uploads/{uuid} URLs (or data URLs for optimistic display)
 }
 
 interface AttachedImage {
-  data: string        // base64
+  tempId: string       // local key; never sent to server
+  uuid: string | null  // null while upload is in flight
+  data: string         // base64 (kept until send for upload payload)
   media_type: string
-  preview: string     // data URL for <img>
+  preview: string      // data URL — shown immediately before upload completes
 }
 
 // ---------------------------------------------------------------------------
@@ -68,12 +71,17 @@ function groupByProfile(sessions: SessionSummary[]): Profile[] {
     arr.push(s)
     map.set(s.profile_name, arr)
   }
-  // Profiles collapsed by default
   return Array.from(map.entries()).map(([name, slist]) => ({ name, sessions: slist, expanded: false }))
 }
 
 function renderMd(text: string): string {
   return String(marked.parse(text))
+}
+
+// Normalize a timestamp string to ms-since-epoch for reliable comparison
+// across different ISO format variations (Z vs +00:00, microseconds, etc.)
+function tsMs(iso: string): number {
+  return new Date(iso).getTime()
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +129,9 @@ export default function App() {
   const [selectedProfile, setSelectedProfile] = useState<string>('default')
   const [selectedSession, setSelectedSession] = useState<SessionSummary | null>(null)
 
+  // Stable UUID for a new session before first send
+  const [pendingSessionId, setPendingSessionId] = useState<string>(() => crypto.randomUUID())
+
   // Server-side UI meta (titles + emojis)
   const [uiMeta, setUiMeta] = useState<UIMeta>({ session_titles: {}, profile_emojis: {} })
 
@@ -138,8 +149,12 @@ export default function App() {
   const [streaming, setStreaming] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
 
-  // Files
+  // Files — attached for current turn
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([])
+  const [isDragOver, setIsDragOver] = useState(false)
+
+  // UUIDs of all uploads sent in this session so far (for image context accumulation)
+  const [sessionImageUUIDs, setSessionImageUUIDs] = useState<string[]>([])
 
   // Model selection
   const [modelsConfig, setModelsConfig] = useState<ModelsConfig | null>(null)
@@ -161,7 +176,6 @@ export default function App() {
 
   const currentEmoji = uiMeta.profile_emojis[selectedProfile] ?? '🙂'
 
-  // Providers that have at least one configured option; fall back to default
   const configuredProviders = [...new Set((modelsConfig?.configured_options ?? []).map(o => o.provider))]
   if (modelsConfig?.default_provider && !configuredProviders.includes(modelsConfig.default_provider)) {
     configuredProviders.unshift(modelsConfig.default_provider)
@@ -170,7 +184,9 @@ export default function App() {
   const modelsForProvider = (modelsConfig?.configured_options ?? [])
     .filter(o => o.provider === activeProvider)
     .map(o => o.model)
-  const activeModel = selectedModel ?? modelsConfig?.default_model ?? null
+  const activeModel = selectedModel ?? modelsForProvider[0] ?? modelsConfig?.default_model ?? null
+
+  const hasUploadingImages = attachedImages.some(img => img.uuid === null)
 
   // ---------------------------------------------------------------------------
   // Load on mount
@@ -210,12 +226,36 @@ export default function App() {
   const selectSession = async (session: SessionSummary) => {
     setSelectedProfile(session.profile_name)
     setSelectedSession(session)
+    setAttachedImages([])
+    setSessionImageUUIDs([])
     try {
-      const detail = await fetchSession(session.id)
+      const [detail, uploads] = await Promise.all([
+        fetchSession(session.id),
+        fetchSessionUploads(session.id),
+      ])
+
+      // Build a map: turn_timestamp (ms) → upload URL list
+      // Timestamps from the DB use the same clock, so normalizing to ms is safe
+      const byTurnMs = new Map<number, string[]>()
+      for (const [ts, items] of Object.entries(uploads.by_turn)) {
+        if (ts === '__pending__') continue
+        const ms = tsMs(ts)
+        if (!isNaN(ms)) {
+          byTurnMs.set(ms, items.map(u => u.url))
+        }
+      }
+
+      // Collect all known upload UUIDs as session context
+      const allUUIDs = Object.entries(uploads.by_turn)
+        .filter(([ts]) => ts !== '__pending__')
+        .flatMap(([, items]) => items.map(u => u.uuid))
+      setSessionImageUUIDs(allUUIDs)
+
       setMessages(detail.turns.map(t => ({
         role: t.role as 'user' | 'assistant',
         content: t.content,
         timestamp: t.timestamp,
+        imagePreviews: byTurnMs.get(tsMs(t.timestamp)),
       })))
     } catch (e) {
       console.error('Failed to load session', e)
@@ -226,6 +266,9 @@ export default function App() {
     setSelectedProfile(profile)
     setSelectedSession(null)
     setMessages([])
+    setSessionImageUUIDs([])
+    setAttachedImages([])
+    setPendingSessionId(crypto.randomUUID())
     textareaRef.current?.focus()
   }
 
@@ -268,25 +311,63 @@ export default function App() {
   }
 
   // ---------------------------------------------------------------------------
-  // File attachment
+  // File attachment — uploads to server immediately for persistence
   // ---------------------------------------------------------------------------
 
-  const handleFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-    Array.from(e.target.files ?? []).forEach(file => {
+  const processImageFiles = useCallback((files: File[]) => {
+    const sessionId = selectedSession?.id ?? pendingSessionId
+    const batchId = crypto.randomUUID()
+    const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'))
+
+    imageFiles.forEach(file => {
+      const tempId = crypto.randomUUID()
       const reader = new FileReader()
       reader.onload = ev => {
         const dataUrl = ev.target?.result as string
         const media_type = file.type || 'image/jpeg'
         const data = dataUrl.split(',')[1] ?? ''
-        setAttachedImages(prev => [...prev, { data, media_type, preview: dataUrl }])
+
+        setAttachedImages(prev => [...prev, { tempId, uuid: null, data, media_type, preview: dataUrl }])
+
+        uploadImage({ data, media_type, session_id: sessionId, batch_id: batchId })
+          .then(result => {
+            setAttachedImages(prev =>
+              prev.map(img => img.tempId === tempId ? { ...img, uuid: result.uuid } : img)
+            )
+          })
+          .catch(err => {
+            console.error('Upload failed', err)
+            // Remove the image if upload fails
+            setAttachedImages(prev => prev.filter(img => img.tempId !== tempId))
+          })
       }
       reader.readAsDataURL(file)
     })
+  }, [selectedSession, pendingSessionId])
+
+  const handleFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    processImageFiles(Array.from(e.target.files ?? []))
     e.target.value = ''
   }
 
-  const removeImage = (i: number) => {
-    setAttachedImages(prev => prev.filter((_, idx) => idx !== i))
+  const removeImage = (tempId: string) => {
+    setAttachedImages(prev => prev.filter(img => img.tempId !== tempId))
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(false)
+    processImageFiles(Array.from(e.dataTransfer.files))
   }
 
   // ---------------------------------------------------------------------------
@@ -295,15 +376,25 @@ export default function App() {
 
   const sendMessage = async () => {
     const text = input.trim()
-    if (!text || streaming) return
+    if (!text || streaming || hasUploadingImages) return
     setInput('')
 
     const isNew = !selectedSession
-    const sessionId = selectedSession?.id ?? crypto.randomUUID()
-    const images = attachedImages.map(img => ({ data: img.data, media_type: img.media_type }))
+    const sessionId = selectedSession?.id ?? pendingSessionId
+
+    const newUUIDs = attachedImages.map(img => img.uuid).filter(Boolean) as string[]
+    const allUUIDs = [...sessionImageUUIDs, ...newUUIDs]
+    const newPreviews = attachedImages.map(img => `/v1/uploads/${img.uuid}`)
     setAttachedImages([])
 
-    setMessages(prev => [...prev, { role: 'user', content: text, timestamp: new Date().toISOString() }])
+    const userTs = new Date().toISOString()
+
+    setMessages(prev => [...prev, {
+      role: 'user',
+      content: text,
+      timestamp: userTs,
+      imagePreviews: newPreviews.length ? newPreviews : undefined,
+    }])
     setStreaming(true)
     setStreamingContent('')
 
@@ -318,7 +409,7 @@ export default function App() {
         no_think: !thinking,
         provider: activeProvider,
         model: activeModel,
-        images,
+        upload_uuids: allUUIDs.length ? allUUIDs : undefined,
       },
       delta => {
         accumulated += delta
@@ -334,10 +425,16 @@ export default function App() {
         }])
         setStreamingContent('')
         setStreaming(false)
+        if (newUUIDs.length) {
+          setSessionImageUUIDs(prev => [...prev, ...newUUIDs])
+        }
         loadSessions().then(sessions => {
           if (isNew) {
             const found = sessions.find(s => s.id === sessionId)
-            if (found) setSelectedSession(found)
+            if (found) {
+              setSelectedSession(found)
+              // pendingSessionId stays; newSession() will reset it when needed
+            }
           }
         })
       },
@@ -440,7 +537,6 @@ export default function App() {
 
         {/* Header */}
         <header className="h-[72px] bg-white/60 backdrop-blur-xl border-b border-black/[0.06] flex items-center justify-between px-6 shrink-0">
-          {/* Left: emoji (opens picker) + profile name */}
           <div className="flex items-center gap-2 relative">
             <button
               onClick={() => setShowEmojiPicker(v => !v)}
@@ -458,7 +554,6 @@ export default function App() {
             <span className="text-[17px] font-semibold text-black">{selectedProfile}</span>
           </div>
 
-          {/* Right: editable session title */}
           {selectedSession && (
             editingTitle ? (
               <input
@@ -493,7 +588,16 @@ export default function App() {
               <div key={i} className={msg.role === 'user' ? 'flex justify-end' : ''}>
                 {msg.role === 'user' ? (
                   <div className="bg-[#007AFF] text-white rounded-[18px] px-4 py-3 max-w-[560px] shadow-sm">
-                    <p className="text-[15px] leading-[1.4] whitespace-pre-wrap">{msg.content}</p>
+                    {msg.imagePreviews && msg.imagePreviews.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {msg.imagePreviews.map((src, j) => (
+                          <img key={j} src={src} alt="" className="max-h-40 rounded-xl object-cover" />
+                        ))}
+                      </div>
+                    )}
+                    {msg.content && (
+                      <p className="text-[15px] leading-[1.4] whitespace-pre-wrap">{msg.content}</p>
+                    )}
                   </div>
                 ) : (
                   <div>
@@ -555,7 +659,14 @@ export default function App() {
         {/* Input */}
         <div className="px-6 pb-6 shrink-0">
           <div className="max-w-[900px] mx-auto">
-            <div className="bg-white/90 backdrop-blur-xl rounded-[20px] border border-black/[0.08] shadow-[0_2px_16px_rgba(0,0,0,0.06)] px-5 pt-4 pb-3">
+            <div
+              className={`bg-white/90 backdrop-blur-xl rounded-[20px] border shadow-[0_2px_16px_rgba(0,0,0,0.06)] px-5 pt-4 pb-3 transition-colors ${
+                isDragOver ? 'border-[#007AFF]/60 bg-[#007AFF]/[0.03]' : 'border-black/[0.08]'
+              }`}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+            >
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -574,19 +685,29 @@ export default function App() {
               {/* Image previews */}
               {attachedImages.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-3">
-                  {attachedImages.map((img, i) => (
-                    <div key={i} className="relative group">
+                  {attachedImages.map(img => (
+                    <div key={img.tempId} className="relative group">
                       <img
                         src={img.preview}
                         alt=""
-                        className="w-16 h-16 object-cover rounded-lg border border-black/[0.08]"
+                        className={`w-16 h-16 object-cover rounded-lg border border-black/[0.08] transition-opacity ${img.uuid === null ? 'opacity-50' : ''}`}
                       />
-                      <button
-                        onClick={() => removeImage(i)}
-                        className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-black/60 text-white rounded-full text-[11px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        ✕
-                      </button>
+                      {img.uuid === null && (
+                        <div className="absolute inset-0 flex items-center justify-center rounded-lg">
+                          <svg className="w-4 h-4 text-black/50 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                        </div>
+                      )}
+                      {img.uuid !== null && (
+                        <button
+                          onClick={() => removeImage(img.tempId)}
+                          className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-black/60 text-white rounded-full text-[11px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          ✕
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -628,7 +749,14 @@ export default function App() {
                   {configuredProviders.length > 0 && (
                     <select
                       value={activeProvider ?? ''}
-                      onChange={e => { setSelectedProvider(e.target.value); setSelectedModel(null) }}
+                      onChange={e => {
+                        const p = e.target.value
+                        setSelectedProvider(p)
+                        setSessionImageUUIDs([])
+                        const first = (modelsConfig?.configured_options ?? [])
+                          .find(o => o.provider === p)?.model ?? null
+                        setSelectedModel(first)
+                      }}
                       className="bg-black/[0.04] hover:bg-black/[0.06] text-[12px] text-black/70 px-2.5 py-1.5 rounded-lg border-none outline-none cursor-pointer transition-colors max-w-[110px] truncate"
                     >
                       {configuredProviders.map(p => (
@@ -653,7 +781,7 @@ export default function App() {
                   {/* Send */}
                   <button
                     onClick={sendMessage}
-                    disabled={!input.trim() || streaming}
+                    disabled={!input.trim() || streaming || hasUploadingImages}
                     className="flex items-center gap-2 bg-[#007AFF] hover:bg-[#0051D5] disabled:bg-black/20 disabled:cursor-not-allowed text-white px-4 py-2 rounded-xl text-[13px] font-medium transition-colors"
                   >
                     {streaming ? (

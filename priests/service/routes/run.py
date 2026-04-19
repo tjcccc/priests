@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 import uuid
@@ -20,6 +21,7 @@ from priests.memory.extractor import (
     trim_memories,
 )
 from priests.profile.config import load_profile_config
+from priests.service.routes.uploads import load_upload_images, update_turn_timestamps
 from priests.service.schemas import RunRequest
 
 router = APIRouter()
@@ -34,20 +36,29 @@ def _strip_memory_blocks(text: str) -> str:
     return text
 
 
-def _build_images(body: RunRequest) -> list[ImageInput]:
+def _build_images(body: RunRequest, extra: list[tuple[bytes, str]] | None = None) -> list[ImageInput]:
     images = []
     for img in body.images:
         if img.url:
             images.append(ImageInput(url=img.url, media_type=img.media_type))
         else:
             images.append(ImageInput(data=img.data, media_type=img.media_type))
+    for file_bytes, media_type in (extra or []):
+        images.append(ImageInput(data=base64.b64encode(file_bytes).decode(), media_type=media_type))
     return images
 
 
-def _build_priest_request(body: RunRequest, config: AppConfig, guide: str | None = None) -> PriestRequest:
+def _build_priest_request(
+    body: RunRequest,
+    config: AppConfig,
+    guide: str | None = None,
+    upload_images: list[tuple[bytes, str]] | None = None,
+) -> PriestRequest:
     provider_options: dict = {}
-    if body.no_think or not config.default.think:
-        provider_options["think"] = False
+    # Only forward think=True when explicitly enabled; never send think=False because
+    # providers like Gemini reject unknown fields and most providers default to no thinking.
+    if not body.no_think and config.default.think:
+        provider_options["think"] = True
 
     priest_config = PriestConfig(
         provider=body.provider or config.default.provider,
@@ -77,7 +88,7 @@ def _build_priest_request(body: RunRequest, config: AppConfig, guide: str | None
         context=base_context,
         memory=body.memory,
         user_context=body.user_context,
-        images=_build_images(body),
+        images=_build_images(body, upload_images),
         output=body.output,
         metadata=body.metadata,
     )
@@ -123,12 +134,16 @@ async def run_once(body: RunRequest, request: Request, memories: bool = True) ->
     """Single run — no session required. Pass ?memories=false to disable memory loading and saving."""
     engine = request.app.state.engine
     config: AppConfig = request.app.state.config
+    db_path = str(request.app.state.db_path)
     guide = load_global_guide(config)
-    priest_request = _build_priest_request(body, config, guide=guide)
+    upload_images = await load_upload_images(db_path, body.upload_uuids)
+    priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images)
     store = request.app.state.store
     response = await engine.run(priest_request)
     if not response.ok:
         raise HTTPException(status_code=500, detail={"code": response.error.code, "message": response.error.message})
+    if body.upload_uuids and priest_request.session:
+        await update_turn_timestamps(db_path, priest_request.session.id, body.upload_uuids)
     return await _apply_memory(response, body, config, store, memories=memories)
 
 
@@ -137,23 +152,28 @@ async def chat(body: RunRequest, request: Request, memories: bool = True) -> Pri
     """Chat run — session is auto-created if session_id is not provided. Pass ?memories=false to disable memory loading and saving."""
     engine = request.app.state.engine
     config: AppConfig = request.app.state.config
+    db_path = str(request.app.state.db_path)
     store = request.app.state.store
 
     if not body.session_id:
         body = body.model_copy(update={"session_id": str(uuid.uuid4()), "create_session_if_missing": True})
 
     guide = load_global_guide(config)
-    priest_request = _build_priest_request(body, config, guide=guide)
+    upload_images = await load_upload_images(db_path, body.upload_uuids)
+    priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images)
     response = await engine.run(priest_request)
     if not response.ok:
         raise HTTPException(status_code=500, detail={"code": response.error.code, "message": response.error.message})
+    if body.upload_uuids and priest_request.session:
+        await update_turn_timestamps(db_path, priest_request.session.id, body.upload_uuids)
     return await _apply_memory(response, body, config, store, memories=memories)
 
 
-async def _sse_generator(body: RunRequest, config: AppConfig, engine, store, memories: bool):
+async def _sse_generator(body: RunRequest, config: AppConfig, engine, store, db_path: str, memories: bool):
     """Async generator for SSE: yields 'data: ...\n\n' lines, filters memory blocks."""
     guide = load_global_guide(config)
-    priest_request = _build_priest_request(body, config, guide=guide)
+    upload_images = await load_upload_images(db_path, body.upload_uuids)
+    priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images)
     stripper = StreamingStripper()
 
     try:
@@ -170,7 +190,10 @@ async def _sse_generator(body: RunRequest, config: AppConfig, engine, store, mem
         yield f"data: {json.dumps({'error': {'code': code, 'message': msg}})}\n\n"
         return
 
-    # Post-stream memory processing (same as non-streaming routes)
+    # Post-stream: update upload turn timestamps, then handle memory
+    if body.upload_uuids and priest_request.session:
+        await update_turn_timestamps(db_path, priest_request.session.id, body.upload_uuids)
+
     if priest_request.session:
         await clean_last_turn(store, priest_request.session.id)
 
@@ -208,8 +231,9 @@ async def run_once_stream(body: RunRequest, request: Request, memories: bool = T
     engine = request.app.state.engine
     config: AppConfig = request.app.state.config
     store = request.app.state.store
+    db_path = str(request.app.state.db_path)
     return StreamingResponse(
-        _sse_generator(body, config, engine, store, memories),
+        _sse_generator(body, config, engine, store, db_path, memories),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -221,12 +245,13 @@ async def chat_stream(body: RunRequest, request: Request, memories: bool = True)
     engine = request.app.state.engine
     config: AppConfig = request.app.state.config
     store = request.app.state.store
+    db_path = str(request.app.state.db_path)
 
     if not body.session_id:
         body = body.model_copy(update={"session_id": str(uuid.uuid4()), "create_session_if_missing": True})
 
     return StreamingResponse(
-        _sse_generator(body, config, engine, store, memories),
+        _sse_generator(body, config, engine, store, db_path, memories),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

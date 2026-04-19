@@ -13,6 +13,10 @@ def _default_sessions_db() -> Path:
     return Path.home() / ".priests" / "sessions.db"
 
 
+def _default_uploads_dir() -> Path:
+    return Path.home() / ".priests" / "uploads"
+
+
 class DefaultsConfig(BaseModel):
     provider: str | None = None   # set by `priests init`
     model: str | None = None      # set by `priests init`
@@ -26,6 +30,7 @@ class DefaultsConfig(BaseModel):
 class PathsConfig(BaseModel):
     profiles_dir: Path = Field(default_factory=_default_profiles_dir)
     sessions_db: Path = Field(default_factory=_default_sessions_db)
+    uploads_dir: Path = Field(default_factory=_default_uploads_dir)
     log_file: Path | None = None
 
 

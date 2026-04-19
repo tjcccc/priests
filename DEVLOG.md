@@ -1,5 +1,17 @@
 # DEVLOG
 
+## 2026-04-19 — image persistence + API fixes
+
+- **Backend upload storage**: `POST /v1/uploads`, `GET /v1/uploads/{uuid}`, `GET /v1/sessions/{id}/uploads`; files saved to `~/.priests/uploads/{session_id}/{uuid}.{ext}` with Pillow compression (try/except fallback); `uploads` table in `sessions.db` with `turn_timestamp` set after each turn via `update_turn_timestamps`
+- **Session image context**: `upload_uuids` field on `RunRequest`; backend loads files from disk, base64-encodes, and forwards to provider; accumulated across turns per session for visual context; cleared on provider switch
+- **Drag-and-drop** onto the input card; file picker restricted to `image/*`; images uploaded immediately on attach with spinner; Send disabled while any upload is in flight
+- **Refresh persistence**: on session reload, `GET /v1/sessions/{id}/uploads` restores thumbnails; timestamps normalized via `tsMs()` to match `+00:00` vs `Z` format variants
+- **Removed localStorage** image persistence entirely (was a temporary workaround)
+- **Fix: Gemini** `Unknown name "think"` — stop sending `think: False`; only forward `think: True` when explicitly enabled
+- **Fix: DeepSeek** `unknown variant image_url` — clear session image UUIDs when provider is switched
+
+---
+
 ## 2026-04-19 — v0.14.0 — integrated web UI
 
 - React 18 + TypeScript + Vite + Tailwind CSS v4 single-page UI at `priests/ui/`

@@ -39,6 +39,7 @@ class RunRequest(BaseModel):
     no_think: bool = False
     max_output_tokens: int | None = None
     images: list[ImageIn] = []
+    upload_uuids: list[str] = []
     output: OutputSpec = OutputSpec()
     metadata: dict = {}
 
