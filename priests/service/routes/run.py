@@ -41,6 +41,7 @@ def _build_priest_request(body: RunRequest, config: AppConfig, guide: str | None
         model=body.model or config.default.model,
         timeout_seconds=config.default.timeout_seconds,
         max_output_tokens=body.max_output_tokens or config.default.max_output_tokens,
+        max_system_chars=body.max_system_chars,
         provider_options=provider_options,
     )
 
@@ -51,7 +52,7 @@ def _build_priest_request(body: RunRequest, config: AppConfig, guide: str | None
             create_if_missing=body.create_session_if_missing,
         )
 
-    base_context = ["Running inside priests service.", *body.system_context]
+    base_context = ["Running inside priests service.", *body.system_context, *body.context]
     if guide:
         base_context = [guide, *base_context]
 
@@ -60,7 +61,9 @@ def _build_priest_request(body: RunRequest, config: AppConfig, guide: str | None
         profile=body.profile,
         prompt=body.prompt,
         session=session_ref,
-        system_context=base_context,
+        context=base_context,
+        memory=body.memory,
+        user_context=body.user_context,
         output=body.output,
         metadata=body.metadata,
     )

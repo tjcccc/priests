@@ -9,6 +9,15 @@
 
 ---
 
+## 2026-04-19 — v0.8.0 — priest-core v2.0.0 adapter + search prompt fix
+
+- Adapted to `priest-core` v2.0.0 API: renamed `system_context` → `context`, `extra_context` → `user_context`; forwarded new `memory` and `max_system_chars` fields through CLI and service schemas/routes
+- Updated `RunRequest` schema (`priests/service/schemas.py`) with `memory`, `user_context`, `max_system_chars`, and backward-compat `system_context` shim
+- Fixed `_build_priest_request` in `routes/run.py` to merge `system_context` + `context` → `context`, and pass `memory`/`user_context`/`max_system_chars` to `PriestRequest`
+- **Fixed hallucinated search**: Strengthened web search context hint to explicitly state the model has no search tool; it must direct the user to `/search <query>` instead of offering to search or narrating a fake search
+
+---
+
 ## 2026-04-12 — priest-core v1.0.0 migration + memory injection fix + web search
 
 - Switched `priest-core` dep from local editable path to `>=1.0.0` on PyPI; removed `[tool.uv.sources]`

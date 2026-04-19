@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Annotated
 
 import anyio
 import typer
-from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from prompt_toolkit.shortcuts import PromptSession
 from rich.console import Console
 from rich.markup import escape
@@ -219,9 +222,9 @@ async def _run_single(
     memories_dir = config.paths.profiles_dir.expanduser() / profile / "memories"
 
     guide = load_global_guide(config)
-    system_context = ["Running inside priests CLI."]
+    turn_context = ["Running inside priests CLI."]
     if guide:
-        system_context = [guide, *system_context]
+        turn_context = [guide, *turn_context]
     consolidate = False
     if memories:
         # Dedup runs before needs_consolidation so the sentinel check reflects
@@ -230,7 +233,7 @@ async def _run_single(
         deduplicate_file(memories_dir / USER_FILE)
         deduplicate_file(memories_dir / NOTES_FILE)
         consolidate = needs_consolidation(memories_dir)
-        system_context.append(
+        turn_context.append(
             _build_memory_context(memories_dir, size_limit, config.memory.flat_line_cap, consolidate, config.memory.context_limit)
         )
 
@@ -243,7 +246,7 @@ async def _run_single(
         profile=profile,
         prompt=prompt,
         session=session_ref,
-        system_context=system_context,
+        context=turn_context,
     )
 
     start_ms = int(__import__("time").monotonic() * 1000)
@@ -291,12 +294,91 @@ async def _run_single(
             pass
 
 
+def _read_clipboard_image() -> str | None:
+    """Save macOS clipboard image as PNG to a temp file. Returns path or None."""
+    try:
+        check = subprocess.run(
+            ["osascript", "-e", "clipboard info"],
+            capture_output=True, text=True, timeout=2,
+        )
+        # Screenshots appear as «class PNGf»; Finder copies may show "picture".
+        stdout = check.stdout.lower()
+        if not any(x in stdout for x in ("picture", "pngf", "tiff", "jpeg", "image")):
+            return None
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp.close()
+        script = (
+            f'set imageData to (the clipboard as «class PNGf»)\n'
+            f'set fileRef to open for access POSIX file "{tmp.name}" with write permission\n'
+            f'write imageData to fileRef\n'
+            f'close access fileRef'
+        )
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, timeout=5)
+        if result.returncode != 0 or os.path.getsize(tmp.name) == 0:
+            os.unlink(tmp.name)
+            return None
+        return tmp.name
+    except Exception:
+        return None
+
+
+_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
+
+
+def _extract_image_paths(text: str, pending: list) -> str:
+    """Replace image file paths/names in text with [image #N] markers.
+
+    Scans for tokens that look like image file paths (absolute, ~/..., or bare
+    filenames with a known image extension). For each one found that resolves to
+    a real file, appends it to pending and replaces the token in text.
+    Returns the rewritten text.
+    """
+    import re
+    import shlex
+
+    # Match: absolute paths, home-relative paths, or bare filenames with image ext
+    pattern = re.compile(
+        r'(?<!\[)'                          # not already inside [...]
+        r'((?:~|/)[^\s,;"\']*|[^\s/,;"\']+)'  # path-like token
+        r'(?!\])'
+    )
+
+    def _replace(m: re.Match) -> str:
+        token = m.group(1)
+        # Unescape shell quoting if needed
+        try:
+            token = shlex.split(token)[0]
+        except ValueError:
+            pass
+        suffix = Path(token).suffix.lower()
+        if suffix not in _IMAGE_EXTENSIONS:
+            return m.group(0)
+        # Resolve home-relative and check existence
+        resolved = Path(token).expanduser()
+        if not resolved.exists():
+            # Try treating bare filename as relative to Downloads
+            candidate = Path.home() / "Downloads" / token
+            if candidate.exists():
+                resolved = candidate
+            else:
+                return m.group(0)
+        pending.append(str(resolved))
+        return f"[image #{len(pending)}]"
+
+    return pattern.sub(_replace, text)
+
+
 _CHAT_HELP = """\
 [bold]Chat commands:[/bold]
   [bold]/exit[/bold]              Exit the chat.
   [bold]/think on[/bold]          Enable thinking mode (if model supports it).
   [bold]/think off[/bold]         Disable thinking mode.
   [bold]/new[/bold]               Start a new session.
+  [bold]Cmd+V[/bold]              Paste image from clipboard as [image #N] (macOS). Requires a vision model.
+  [bold]/image[/bold]             Attach image from clipboard via /image command.
+  [bold]/image[/bold] [dim]<path>[/dim]      Attach image from file path.
+  [bold]/image clear[/bold]       Remove all pending images.
+  [dim]Tip: pasting an image file path (Cmd+V) also auto-attaches it.[/dim]
   [bold]/search[/bold] [dim]<query>[/dim]    Run a web search; results are injected into the next message.
   [bold]/remember[/bold] [dim]<text>[/dim]   Save text to today's short memory (auto_short.md).
   [bold]/remember![/bold] [dim]<text>[/dim]  Save text to permanent notes (notes.md).
@@ -317,7 +399,7 @@ async def _run_chat(
     import sys as _sys
     import uuid
 
-    from priest import PriestConfig, PriestRequest, SessionRef
+    from priest import ImageInput, PriestConfig, PriestRequest, SessionRef
     from priest.errors import PriestError
     from priests.engine_factory import build_engine, load_global_guide
     from priests.memory.extractor import (
@@ -342,14 +424,17 @@ async def _run_chat(
     memories_dir = config.paths.profiles_dir.expanduser() / profile / "memories"
 
     guide = load_global_guide(config)
-    system_context_base = ["Running inside priests CLI."]
+    context_base = ["Running inside priests CLI."]
     if config.web_search.enabled:
-        system_context_base.append(
-            "The user has a /search <query> command available to run web searches. "
-            "You can ask them to search if current information would help."
+        context_base.append(
+            "You have no built-in web search tool and cannot perform searches yourself. "
+            "When the user asks about current events, recent news, or anything requiring "
+            "fresh web information, instruct them to use the /search <query> command — "
+            "the results will be injected into their next message. "
+            "Do NOT ask 'would you like me to search', narrate a search, or fabricate search results."
         )
     if guide:
-        system_context_base = [guide, *system_context_base]
+        context_base = [guide, *context_base]
 
     sid = session_id or str(uuid.uuid4())
     session_ref = SessionRef(id=sid, create_if_missing=True)
@@ -359,7 +444,51 @@ async def _run_chat(
     console.print(f"[dim]Session:  {sid}[/dim]")
     console.print("[dim]Type /help for commands, Ctrl-C to quit.[/dim]\n")
 
-    prompt_session: PromptSession[str] = PromptSession(key_bindings=_chat_kb)
+    # Pending images to attach to the next user message.
+    _pending_images: list = []
+
+    # Local bindings close over _pending_images so Ctrl+V can append to it.
+    _local_kb = KeyBindings()
+
+    @_local_kb.add("<bracketed-paste>")
+    def _paste_or_image(event) -> None:
+        import re
+        data = event.data.replace("\r\n", "\n").replace("\r", "\n")
+
+        # Try the entire paste as a single file path (handles spaces and backslash-
+        # escaped spaces that Terminal inserts when you drag a file, e.g.
+        # "/Users/foo/Desktop/Screenshot\ 2026-04-18\ at\ 20.42.46.png").
+        stripped = data.strip()
+        if stripped:
+            import shlex as _shlex
+            try:
+                unescaped = _shlex.split(stripped)[0]
+            except (ValueError, IndexError):
+                unescaped = stripped
+            candidate = Path(unescaped).expanduser()
+            if candidate.suffix.lower() in _IMAGE_EXTENSIONS and candidate.exists():
+                _pending_images.append(str(candidate))
+                event.current_buffer.insert_text(f"[image #{len(_pending_images)}]")
+                return
+
+        # Embedded image paths without spaces (absolute or ~-relative).
+        _ext_pat = "|".join(e.lstrip(".") for e in _IMAGE_EXTENSIONS)
+        if re.search(rf'(?:~|/)[^\s]*\.(?:{_ext_pat})(?:\s|$)', data, re.IGNORECASE):
+            event.current_buffer.insert_text(_extract_image_paths(data, _pending_images))
+            return
+
+        # No path detected — try to read an image that was copied directly to clipboard
+        # (e.g. Cmd+Shift+Control+4 captures screenshot straight to clipboard).
+        path = _read_clipboard_image()
+        if path:
+            _pending_images.append(path)
+            event.current_buffer.insert_text(f"[image #{len(_pending_images)}]")
+        else:
+            event.current_buffer.insert_text(data)
+
+    prompt_session: PromptSession[str] = PromptSession(
+        key_bindings=merge_key_bindings([_chat_kb, _local_kb])
+    )
 
     # Dedup runs before needs_consolidation so the sentinel check reflects the
     # post-dedup state. A dedup write would otherwise bump mtime and falsely
@@ -380,7 +509,8 @@ async def _run_chat(
     async with store:
         while True:
             try:
-                raw = (await prompt_session.prompt_async("user > ")).strip()
+                img_label = f" [img:{len(_pending_images)}]" if _pending_images else ""
+                raw = (await prompt_session.prompt_async(f"user{img_label} > ")).strip()
             except (EOFError, KeyboardInterrupt):
                 console.print("\n[dim]Bye.[/dim]")
                 break
@@ -427,6 +557,36 @@ async def _run_chat(
                         consolidation_needed = needs_consolidation(memories_dir)
                     consolidation_done = False
                     console.print(f"[dim]New session: {sid}[/dim]")
+                    continue
+
+                elif cmd == "/image":
+                    path = _read_clipboard_image()
+                    if path is None:
+                        err_console.print("[yellow]No image found in clipboard (or not on macOS).[/yellow]")
+                    else:
+                        _pending_images.append(path)
+                        console.print(f"[dim]Image {len(_pending_images)} attached from clipboard.[/dim]")
+                    continue
+
+                elif cmd == "/image clear":
+                    for p in _pending_images:
+                        try:
+                            os.unlink(p)
+                        except OSError:
+                            pass
+                    _pending_images.clear()
+                    console.print("[dim]Pending images cleared.[/dim]")
+                    continue
+
+                elif raw.lower().startswith("/image "):
+                    img_path = raw[len("/image "):].strip()
+                    if not img_path:
+                        err_console.print("[yellow]Usage:[/yellow] /image <path>")
+                    elif not Path(img_path).exists():
+                        err_console.print(f"[red]File not found:[/red] {escape(img_path)}")
+                    else:
+                        _pending_images.append(img_path)
+                        console.print(f"[dim]Image {len(_pending_images)} attached: {img_path}[/dim]")
                     continue
 
                 elif raw.lower().startswith("/search "):
@@ -476,25 +636,34 @@ async def _run_chat(
             # --- Build turn system context ---
             do_consolidate = consolidation_needed and not consolidation_done
             if memories_on:
-                turn_context = [*system_context_base, _build_memory_context(
+                turn_context = [*context_base, _build_memory_context(
                     memories_dir, size_limit, config.memory.flat_line_cap, do_consolidate, config.memory.context_limit
                 )]
             else:
-                turn_context = system_context_base
+                turn_context = context_base
 
             # --- Normal prompt ---
-            extra_context: list[str] = []
+            # Auto-detect image file paths pasted via Cmd+V and replace with markers.
+            before_count = len(_pending_images)
+            raw = _extract_image_paths(raw, _pending_images)
+            for _i, _p in enumerate(_pending_images[before_count:], start=before_count + 1):
+                console.print(f"[dim]Auto-attached image {_i}: {_p}[/dim]")
+
+            user_context: list[str] = []
             if _search_context:
-                extra_context.append(_search_context)
+                user_context.append(_search_context)
                 _search_context = None
+
+            images = [ImageInput(path=p) for p in _pending_images]
 
             request = PriestRequest(
                 config=priest_config,
                 profile=profile,
                 prompt=raw,
                 session=session_ref,
-                system_context=turn_context,
-                extra_context=extra_context,
+                context=turn_context,
+                user_context=user_context,
+                images=images,
             )
 
             header_printed = False
@@ -527,6 +696,15 @@ async def _run_chat(
                 _sys.stdout.write(f"{_BOLD}{profile} >{_RESET}\n")
             _sys.stdout.write("\n\n")
             _sys.stdout.flush()
+
+            # Clean up temp clipboard images and clear list after successful turn.
+            for _img_path in _pending_images:
+                try:
+                    if _img_path.startswith(tempfile.gettempdir()):
+                        os.unlink(_img_path)
+                except OSError:
+                    pass
+            _pending_images.clear()
 
             if request.session:
                 await clean_last_turn(store, request.session.id)

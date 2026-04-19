@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "priests"
-version = "0.7.0"
+version = "0.8.0"
 description = "CLI tool and HTTP service for priest AI orchestration"
 requires-python = ">=3.11"
 dependencies = [
-    "priest-core>=1.0.0",
+    "priest-core>=2.0.0",
     "typer>=0.12",
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
@@ -39,3 +39,6 @@ packages = ["priests"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.uv.sources]
+priest-core = { path = "../priest", editable = true }

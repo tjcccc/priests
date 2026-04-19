@@ -501,8 +501,8 @@ wheels = [
 
 [[package]]
 name = "priest-core"
-version = "1.0.0"
-source = { registry = "https://pypi.org/simple" }
+version = "2.0.0"
+source = { editable = "../priest" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "anyio", extra = ["trio"] },
@@ -510,14 +510,25 @@ dependencies = [
     { name = "openai" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/de/28/9addc195f4cbc9aefaea5fac0e430b5fdbe40c76b7b94f401ccdc7ad032c/priest_core-1.0.0.tar.gz", hash = "sha256:4eb68fb3ae3a1551c3f01c2e7e12df1d2b41c8c9b2be9f64c5dcb50dd6caef95", size = 67364, upload-time = "2026-04-12T03:41:44.807Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/59/dd/9b5b24860eb667ae5fcd96ead37abba303f4db9ca65c295e633856136157/priest_core-1.0.0-py3-none-any.whl", hash = "sha256:b1f3bbb8be595970414fb79c2f83ee165666d6267061f9fd6938689f330afaad", size = 23769, upload-time = "2026-04-12T03:41:45.937Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "aiosqlite", specifier = ">=0.19" },
+    { name = "anyio", extras = ["trio"], specifier = ">=4.0" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "openai", specifier = ">=1.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
 ]
 
 [[package]]
 name = "priests"
-version = "0.7.0"
+version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
@@ -552,7 +563,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.111" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "openai", specifier = ">=2.30.0" },
-    { name = "priest-core", specifier = ">=1.0.0" },
+    { name = "priest-core", editable = "../priest" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "questionary", specifier = ">=2.0" },
     { name = "rich", specifier = ">=13.0" },

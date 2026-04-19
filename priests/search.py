@@ -11,7 +11,7 @@ from __future__ import annotations
 def search(query: str, max_results: int = 5) -> str:
     """Run a DuckDuckGo web search and return a formatted text block.
 
-    Returns a plain-text block suitable for injection into ``extra_context``.
+    Returns a plain-text block suitable for injection into ``user_context``.
     Raises ``RuntimeError`` with a helpful install message if the optional
     dependency is not installed.
     """

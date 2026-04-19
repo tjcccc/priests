@@ -13,7 +13,14 @@ class RunRequest(BaseModel):
     profile: str = "default"
     session_id: str | None = None
     create_session_if_missing: bool = True
+    # Legacy alias for `context` — kept for HTTP API backward compatibility.
+    # New clients should use `context` instead.
     system_context: list[str] = []
+    # priest-core v2 fields
+    context: list[str] = []
+    memory: list[str] = []
+    user_context: list[str] = []
+    max_system_chars: int | None = None
     no_think: bool = False
     max_output_tokens: int | None = None
     output: OutputSpec = OutputSpec()
