@@ -41,6 +41,6 @@ def create_app(config: AppConfig) -> FastAPI:
     app.include_router(session_router, prefix="/v1", tags=["sessions"])
 
     if _UI_DIST.exists():
-        app.mount("/ui", StaticFiles(directory=str(_UI_DIST), html=True), name="ui")
+        app.mount("/", StaticFiles(directory=str(_UI_DIST), html=True), name="ui")
 
     return app
