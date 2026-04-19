@@ -1,3 +1,7 @@
+// ---------------------------------------------------------------------------
+// Session / UI meta types
+// ---------------------------------------------------------------------------
+
 export interface SessionSummary {
   id: string
   profile_name: string
@@ -20,9 +24,42 @@ export interface SessionDetail {
   turns: Turn[]
 }
 
+export interface UIMeta {
+  session_titles: Record<string, string>
+  profile_emojis: Record<string, string>
+}
+
+export interface ModelOption {
+  provider: string
+  model: string
+}
+
+export interface ProviderInfo {
+  name: string
+  label: string
+  known_models: string[] | null  // null = dynamic (Ollama), [] = free text
+}
+
+export interface ModelsConfig {
+  default_provider: string | null
+  default_model: string | null
+  configured_options: ModelOption[]
+  providers: ProviderInfo[]
+}
+
 export interface StreamMeta {
   model?: string
 }
+
+export interface ImageAttachment {
+  data?: string
+  url?: string
+  media_type?: string
+}
+
+// ---------------------------------------------------------------------------
+// API calls
+// ---------------------------------------------------------------------------
 
 export async function fetchSessions(): Promise<SessionSummary[]> {
   const r = await fetch('/v1/sessions')
@@ -36,11 +73,54 @@ export async function fetchSession(id: string): Promise<SessionDetail> {
   return r.json()
 }
 
+export async function fetchUIMeta(): Promise<UIMeta> {
+  try {
+    const r = await fetch('/v1/ui/meta')
+    if (!r.ok) return { session_titles: {}, profile_emojis: {} }
+    return r.json()
+  } catch {
+    return { session_titles: {}, profile_emojis: {} }
+  }
+}
+
+export async function putSessionTitle(id: string, title: string): Promise<void> {
+  await fetch(`/v1/ui/sessions/${id}/title`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  })
+}
+
+export async function putProfileEmoji(name: string, emoji: string): Promise<void> {
+  await fetch(`/v1/ui/profiles/${name}/emoji`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ emoji }),
+  })
+}
+
+export async function fetchModels(): Promise<ModelsConfig> {
+  try {
+    const r = await fetch('/v1/ui/models')
+    if (!r.ok) return { default_provider: null, default_model: null, configured_options: [], providers: [] }
+    return r.json()
+  } catch {
+    return { default_provider: null, default_model: null, configured_options: [], providers: [] }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming chat
+// ---------------------------------------------------------------------------
+
 export interface ChatParams {
   prompt: string
   session_id?: string
   profile?: string
   no_think?: boolean
+  provider?: string | null
+  model?: string | null
+  images?: ImageAttachment[]
 }
 
 export async function streamChat(
@@ -56,6 +136,9 @@ export async function streamChat(
     create_session_if_missing: true,
   }
   if (params.session_id) body.session_id = params.session_id
+  if (params.provider) body.provider = params.provider
+  if (params.model) body.model = params.model
+  if (params.images?.length) body.images = params.images
 
   let r: Response
   try {
@@ -103,7 +186,7 @@ export async function streamChat(
           onError(String(err.message ?? 'Unknown error'))
           return
         }
-      } catch { /* ignore malformed SSE lines */ }
+      } catch { /* ignore malformed lines */ }
     }
   }
   onDone(collectedMeta)
