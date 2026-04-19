@@ -88,6 +88,35 @@ def model_default(
     console.print(f"  {provider_name}/{model}")
 
 
+@model_app.command("rm")
+def model_rm(
+    model: Annotated[str, typer.Argument(help="Model to remove, e.g. ollama/llava:7b.")],
+    config_file: Annotated[Path | None, typer.Option("--config", help="Path to priests.toml.")] = None,
+) -> None:
+    """Remove a model from your list."""
+    if not is_initialized(config_file):
+        err_console.print("[yellow]Not initialized.[/yellow] Run [bold]priests init[/bold] first.")
+        raise typer.Exit(1)
+
+    config = load_config(config_file)
+
+    if model not in config.models.options:
+        err_console.print(f"[red]Model not found:[/red] {model}")
+        raise typer.Exit(1)
+
+    config.models.options.remove(model)
+
+    is_default = f"{config.default.provider}/{config.default.model}" == model
+    if is_default:
+        config.default.provider = ""
+        config.default.model = ""
+
+    save_config(config, config_file)
+    console.print(f"[green]Removed:[/green] {model}")
+    if is_default:
+        console.print("[yellow]That was your default model.[/yellow] Run [bold]priests model default[/bold] to set a new one.")
+
+
 @model_app.command("add")
 def model_add(
     config_file: Annotated[Path | None, typer.Option("--config", help="Path to priests.toml.")] = None,

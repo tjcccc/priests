@@ -8,6 +8,13 @@
 
 ---
 
+## 2026-04-19 — v0.11.0 — model rm command
+
+- `priests model rm <provider/model>` removes a model from the list
+- If the removed model was the active default, clears the default and prompts to set a new one
+
+---
+
 ## 2026-04-19 — v0.10.0 — agentic file reading + search dependency fix
 
 - **Agentic file reading**: model emits `<read_file>/path/to/file</read_file>`; CLI reads up to 100KB, injects content as `user_context`, pops probe exchange, re-prompts — same loop as auto-search
