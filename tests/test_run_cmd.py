@@ -186,7 +186,7 @@ def test_search_missing_extra_raises_runtime_error():
             search_mod.search("anything")
             assert False, "Expected RuntimeError"
         except RuntimeError as exc:
-            assert "priests[search]" in str(exc)
+            assert "ddgs" in str(exc)
     finally:
         if original is None:
             sys.modules.pop("ddgs", None)

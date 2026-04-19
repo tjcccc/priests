@@ -403,7 +403,7 @@ async def _run_chat(
     from priest.errors import PriestError
     from priests.engine_factory import build_engine, load_global_guide
     from priests.memory.extractor import (
-        StreamingStripper, clean_last_turn,
+        StreamingStripper, clean_last_turn, pop_last_exchange,
         append_memories, apply_consolidation, trim_memories, needs_consolidation,
         mark_consolidated, deduplicate_file, _append_to_file, _append_to_auto_short,
         USER_FILE, NOTES_FILE, AUTO_FILE,
@@ -425,14 +425,22 @@ async def _run_chat(
 
     guide = load_global_guide(config)
     context_base = ["Running inside priests CLI."]
+    tool_hints: list[str] = []
     if config.web_search.enabled:
-        context_base.append(
-            "You have a web search tool. When you need current information to answer the user, "
-            "emit exactly this tag on its own and nothing else: "
-            "<search_query>your search query here</search_query>. "
-            "The system will run the search automatically and re-prompt you with the results. "
-            "Do NOT narrate, simulate, or fabricate a search. Do NOT ask the user to search."
+        tool_hints.append(
+            "Web search: emit <search_query>your query</search_query> and nothing else. "
+            "The system runs the search and re-prompts you with results. "
+            "Do NOT narrate or simulate a search."
         )
+    tool_hints.append(
+        "File reading: when the user asks you to read a local file, emit "
+        "<read_file>/absolute/path/to/file</read_file> and nothing else. "
+        "The system reads the file and re-prompts you with its contents."
+    )
+    context_base.append(
+        "You have the following tools available — use them by emitting the tag alone with no other text:\n"
+        + "\n".join(f"- {h}" for h in tool_hints)
+    )
     if guide:
         context_base = [guide, *context_base]
 
@@ -692,55 +700,78 @@ async def _run_chat(
                 err_console.print(f"\n[red]Error:[/red] {exc.code}: {escape(exc.message)}")
                 continue
 
-            # --- Agentic search loop ---
-            # If the model emitted only <search_query>…</search_query> (nothing visible),
-            # run the search automatically and re-stream with results injected.
-            if config.web_search.enabled and stripper.search_query and not header_printed:
-                query = stripper.search_query.strip()
-                console.print(f"[dim]Searching: {query}…[/dim]")
-                # Remove probe exchange so history stays clean for the real answer.
+            # --- Agentic tool loops ---
+            # When the model emits only a tool tag (nothing visible), run the
+            # tool and re-stream with the result injected as user_context.
+
+            async def _agentic_rerun(tool_context: str) -> tuple[StreamingStripper, bool]:
+                """Pop probe exchange, re-run with tool_context, return new stripper + header_printed."""
+                nonlocal request
                 if request.session:
                     await pop_last_exchange(store, request.session.id)
-                try:
-                    from priests.search import search as _do_search
-                    search_results = _do_search(query, config.web_search.max_results)
-                except Exception as _se:
-                    search_results = f"Search failed: {_se}"
-
-                search_request = PriestRequest(
+                tool_request = PriestRequest(
                     config=priest_config,
                     profile=profile,
                     prompt=raw,
                     session=session_ref,
                     context=turn_context,
-                    user_context=[search_results],
+                    user_context=[tool_context],
                     images=images,
                 )
-                header_printed = False
-                stripper = StreamingStripper()
+                new_stripper = StreamingStripper()
+                hp = False
                 try:
-                    async for chunk in engine.stream(search_request):
-                        safe = stripper.feed(chunk)
-                        if not header_printed:
+                    async for chunk in engine.stream(tool_request):
+                        safe = new_stripper.feed(chunk)
+                        if not hp:
                             safe = safe.lstrip("\n")
                         if safe:
-                            if not header_printed:
+                            if not hp:
                                 _sys.stdout.write(f"{_BOLD}{profile} >{_RESET} ")
-                                header_printed = True
+                                hp = True
                             _sys.stdout.write(safe)
                             _sys.stdout.flush()
-                    tail = stripper.flush()
-                    if not header_printed:
+                    tail = new_stripper.flush()
+                    if not hp:
                         tail = tail.lstrip("\n")
                     if tail:
-                        if not header_printed:
+                        if not hp:
                             _sys.stdout.write(f"{_BOLD}{profile} >{_RESET} ")
-                            header_printed = True
+                            hp = True
                         _sys.stdout.write(tail)
                         _sys.stdout.flush()
                 except PriestError as exc:
                     err_console.print(f"\n[red]Error:[/red] {exc.code}: {escape(exc.message)}")
-                request = search_request  # use for clean_last_turn below
+                request = tool_request
+                return new_stripper, hp
+
+            if config.web_search.enabled and stripper.search_query and not header_printed:
+                query = stripper.search_query.strip()
+                console.print(f"[dim]Searching: {query}…[/dim]")
+                try:
+                    from priests.search import search as _do_search
+                    tool_ctx = _do_search(query, config.web_search.max_results)
+                except Exception as _se:
+                    tool_ctx = f"Search failed: {_se}"
+                stripper, header_printed = await _agentic_rerun(tool_ctx)
+
+            elif stripper.read_file_path and not header_printed:
+                _FILE_SIZE_LIMIT = 100_000
+                fpath = stripper.read_file_path.strip()
+                console.print(f"[dim]Reading: {fpath}…[/dim]")
+                try:
+                    raw_bytes = Path(fpath).read_bytes()
+                    text = raw_bytes.decode("utf-8", errors="replace")
+                    if len(text) > _FILE_SIZE_LIMIT:
+                        text = text[:_FILE_SIZE_LIMIT] + f"\n\n[truncated — file exceeds {_FILE_SIZE_LIMIT} chars]"
+                    tool_ctx = f"## File: {fpath}\n\n{text}"
+                except FileNotFoundError:
+                    tool_ctx = f"File not found: {fpath}"
+                except PermissionError:
+                    tool_ctx = f"Permission denied reading: {fpath}"
+                except Exception as _fe:
+                    tool_ctx = f"Error reading {fpath}: {_fe}"
+                stripper, header_printed = await _agentic_rerun(tool_ctx)
 
             if not header_printed:
                 _sys.stdout.write(f"{_BOLD}{profile} >{_RESET}\n")

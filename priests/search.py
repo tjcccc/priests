@@ -19,8 +19,8 @@ def search(query: str, max_results: int = 5) -> str:
         from ddgs import DDGS  # type: ignore[import]
     except ImportError as exc:
         raise RuntimeError(
-            "Web search requires the 'search' extra. "
-            "Install it with: uv pip install \"priests[search]\""
+            "Web search requires ddgs. "
+            "Install it with: uv pip install ddgs"
         ) from exc
 
     with DDGS() as ddgs:

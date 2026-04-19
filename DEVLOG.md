@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-04-19 — v0.10.0 — agentic file reading + search dependency fix
+
+- **Agentic file reading**: model emits `<read_file>/path/to/file</read_file>`; CLI reads up to 100KB, injects content as `user_context`, pops probe exchange, re-prompts — same loop as auto-search
+- `StreamingStripper` extended with `<read_file>` block capture
+- Tool hint in system prompt now lists both tools (web search + file reading) when applicable
+- Refactored agentic re-run into shared `_agentic_rerun()` coroutine to avoid duplication
+- **Fixed search dependency**: switched from stale `ddgs` optional extra to `ddgs>=9.14.0` as a core dep; updated `search.py` import accordingly (`duckduckgo_search` → `ddgs`); fixed broken test assertion
+
+---
+
 ## 2026-04-19 — v0.9.0 — agentic auto-search loop
 
 - **Auto-search agentic loop**: When the user asks for current information, the model now emits `<search_query>QUERY</search_query>`; the CLI intercepts it, runs the search automatically, pops the probe exchange from session history, and re-prompts the model with the results — transparent to the user, like ChatGPT search

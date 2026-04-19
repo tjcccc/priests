@@ -23,19 +23,22 @@ SENTINEL_FILE = ".last_consolidated"
 _OPEN_APPEND = "<memory_append"
 _OPEN_CONSOLIDATION = "<memory_consolidation"
 _OPEN_SEARCH = "<search_query"
+_OPEN_READ_FILE = "<read_file"
 _CLOSE_APPEND = "</memory_append>"
 _CLOSE_CONSOLIDATION = "</memory_consolidation>"
 _CLOSE_SEARCH = "</search_query>"
+_CLOSE_READ_FILE = "</read_file>"
 
 _CLOSE_TAG: dict[str, str] = {
     "append": _CLOSE_APPEND,
     "consolidation": _CLOSE_CONSOLIDATION,
     "search": _CLOSE_SEARCH,
+    "read_file": _CLOSE_READ_FILE,
 }
 
 
 class StreamingStripper:
-    """State-machine stripper for <memory_append>, <memory_consolidation>, and <search_query> blocks.
+    """State-machine stripper for <memory_append>, <memory_consolidation>, <search_query>, and <read_file> blocks.
 
     Tolerates any whitespace or attributes inside the opening tag (e.g. the
     model adding a newline between ``<memory_append`` and ``>``).  Blocks must
@@ -54,6 +57,7 @@ class StreamingStripper:
         self.append_json: str | None = None
         self.consolidation_json: str | None = None
         self.search_query: str | None = None
+        self.read_file_path: str | None = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -74,6 +78,7 @@ class StreamingStripper:
             ("append", _OPEN_APPEND),
             ("consolidation", _OPEN_CONSOLIDATION),
             ("search", _OPEN_SEARCH),
+            ("read_file", _OPEN_READ_FILE),
         ):
             pos = lo.find(prefix)
             if pos == -1:
@@ -101,8 +106,10 @@ class StreamingStripper:
             self.append_json = payload
         elif block_type == "consolidation":
             self.consolidation_json = payload
-        else:
+        elif block_type == "search":
             self.search_query = payload
+        else:
+            self.read_file_path = payload
 
     # ------------------------------------------------------------------
     # Public API
