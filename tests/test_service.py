@@ -95,14 +95,31 @@ def test_run_error_returns_500(client):
 
 
 def test_run_memories_false_skips_store(client):
-    c, engine, store = client
-    engine.run.return_value = _ok_response("ok")
+    c, engine, _ = client
+    # Response has a session so clean_last_turn would normally be called.
+    engine.run.return_value = _ok_response("ok", session_id="sess-1")
+    with patch("priests.service.routes.run.clean_last_turn", new=AsyncMock()), \
+         patch("priests.service.routes.run.append_memories") as mock_append, \
+         patch("priests.service.routes.run.apply_consolidation") as mock_consol, \
+         patch("priests.service.routes.run.trim_memories") as mock_trim:
+        resp = c.post("/v1/run?memories=false", json={"prompt": "hi"})
+    assert resp.status_code == 200
+    mock_append.assert_not_called()
+    mock_consol.assert_not_called()
+    mock_trim.assert_not_called()
+
+
+def test_run_strips_memory_blocks_from_text(client):
+    c, engine, _ = client
+    raw = "Hello!<memory_append>[\"note\"]</memory_append> How are you?"
+    engine.run.return_value = _ok_response(raw)
     resp = c.post("/v1/run?memories=false", json={"prompt": "hi"})
     assert resp.status_code == 200
-    store.save.assert_not_called()
+    assert "<memory_append>" not in resp.json()["text"]
+    assert "Hello!" in resp.json()["text"]
 
 
-def test_run_forwards_images(client):
+def test_run_forwards_images_url(client):
     c, engine, _ = client
     engine.run.return_value = _ok_response("saw image")
     resp = c.post("/v1/run", json={
@@ -115,6 +132,20 @@ def test_run_forwards_images(client):
     assert call_request.images[0].url == "https://example.com/img.jpg"
 
 
+def test_run_forwards_images_base64(client):
+    c, engine, _ = client
+    engine.run.return_value = _ok_response("saw image")
+    resp = c.post("/v1/run", json={
+        "prompt": "describe this",
+        "images": [{"data": "abc123==", "media_type": "image/png"}],
+    })
+    assert resp.status_code == 200
+    call_request = engine.run.call_args[0][0]
+    assert len(call_request.images) == 1
+    assert call_request.images[0].data == "abc123=="
+    assert call_request.images[0].media_type == "image/png"
+
+
 # ---------------------------------------------------------------------------
 # /v1/chat tests
 # ---------------------------------------------------------------------------
@@ -124,7 +155,6 @@ def test_chat_auto_creates_session(client):
     engine.run.return_value = _ok_response("hi", session_id="auto-123")
     resp = c.post("/v1/chat", json={"prompt": "hello"})
     assert resp.status_code == 200
-    # Engine was called with a session ref
     call_request = engine.run.call_args[0][0]
     assert call_request.session is not None
     assert call_request.session.create_if_missing is True
@@ -137,6 +167,14 @@ def test_chat_uses_provided_session_id(client):
     assert resp.status_code == 200
     call_request = engine.run.call_args[0][0]
     assert call_request.session.id == "my-session"
+
+
+def test_chat_error_returns_500(client):
+    c, engine, _ = client
+    engine.run.return_value = _err_response()
+    resp = c.post("/v1/chat", json={"prompt": "hi"})
+    assert resp.status_code == 500
+    assert resp.json()["detail"]["code"] == "PROVIDER_ERROR"
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +199,39 @@ def test_run_stream_ends_with_done(client):
     engine.stream = MagicMock(return_value=_agen("ok"))
     resp = c.post("/v1/run/stream", json={"prompt": "hi"})
     assert resp.text.strip().endswith("[DONE]")
+
+
+def test_run_stream_filters_memory_blocks(client):
+    c, engine, _ = client
+    engine.stream = MagicMock(return_value=_agen(
+        "Answer.", "<memory_append>", "[\"note\"]", "</memory_append>"
+    ))
+    resp = c.post("/v1/run/stream?memories=false", json={"prompt": "hi"})
+    assert resp.status_code == 200
+    lines = [l for l in resp.text.splitlines() if l.startswith("data:")]
+    payloads = [l[len("data: "):] for l in lines]
+    full_text = "".join(
+        json.loads(p)["delta"] for p in payloads if p != "[DONE]"
+    )
+    assert "<memory_append>" not in full_text
+    assert "Answer." in full_text
+
+
+def test_run_stream_error_yields_error_event(client):
+    c, engine, _ = client
+
+    async def _boom():
+        raise RuntimeError("provider down")
+        yield  # make it an async generator
+
+    engine.stream = MagicMock(return_value=_boom())
+    resp = c.post("/v1/run/stream", json={"prompt": "hi"})
+    assert resp.status_code == 200
+    lines = [l for l in resp.text.splitlines() if l.startswith("data:")]
+    payloads = [l[len("data: "):] for l in lines]
+    assert any("error" in p for p in payloads)
+    # [DONE] must NOT appear after an error
+    assert "[DONE]" not in payloads
 
 
 # ---------------------------------------------------------------------------

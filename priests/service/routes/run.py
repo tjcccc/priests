@@ -183,15 +183,18 @@ async def _sse_generator(body: RunRequest, config: AppConfig, engine, store, mem
                 else config.memory.size_limit
             )
             memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
-            try:
-                if stripper.consolidation_json:
+            if stripper.consolidation_json:
+                try:
                     apply_consolidation(memories_dir, json.loads(stripper.consolidation_json))
                     mark_consolidated(memories_dir)
-                if stripper.append_json:
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            if stripper.append_json:
+                try:
                     append_memories(memories_dir, json.loads(stripper.append_json))
-                trim_memories(memories_dir, size_limit)
-            except (json.JSONDecodeError, Exception):
-                pass
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            trim_memories(memories_dir, size_limit)
 
     yield "data: [DONE]\n\n"
 

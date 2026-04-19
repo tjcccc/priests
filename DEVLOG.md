@@ -1,5 +1,19 @@
 # DEVLOG
 
+## 2026-04-19 — v0.13.0 — service command daemon mode + test hardening
+
+- `priests service` / `priests service start` run foreground by default (live terminal output)
+- `priests service start -d` spawns a background daemon; PID → `~/.priests/service.pid`, logs → `~/.priests/service.log`
+- `priests service stop` — SIGTERM daemon, clears PID file
+- `priests service restart` — stop + re-start daemon
+- `priests service logs [-f] [-n N]` — tail daemon log; `-f` follows live output
+- `priests service status` — pings `/health`; catches both `ConnectError` and `TimeoutException`
+- Added `-h`/`-p` short flags to start, restart, status
+- Fixed streaming memory block: split consolidation/append/trim into separate try/except so a consolidation failure no longer silently skips the other two operations
+- Hardened service tests: 10 → 15 tests; fixed false-passing `memories=false` test; added memory-block stripping, base64 image, SSE filter, SSE error event, and `/v1/chat` 500 coverage
+
+---
+
 ## 2026-04-19 — v0.12.0 — service image support, SSE streaming, test coverage
 
 - **Image forwarding**: `RunRequest` now accepts `images: list[ImageIn]` (url or base64 data); forwarded to `PriestRequest` as `ImageInput` objects for all `/v1/run` and `/v1/chat` routes
