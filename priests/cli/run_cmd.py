@@ -208,7 +208,7 @@ async def _run_single(
     from priest.errors import PriestError
     from priests.engine_factory import build_engine, load_global_guide
     from priests.memory.extractor import (
-        StreamingStripper, clean_last_turn,
+        StreamingStripper, clean_last_turn, pop_last_exchange,
         append_memories, apply_consolidation, trim_memories, needs_consolidation,
         mark_consolidated, deduplicate_file, USER_FILE, NOTES_FILE,
     )
@@ -427,11 +427,11 @@ async def _run_chat(
     context_base = ["Running inside priests CLI."]
     if config.web_search.enabled:
         context_base.append(
-            "You have no built-in web search tool and cannot perform searches yourself. "
-            "When the user asks about current events, recent news, or anything requiring "
-            "fresh web information, instruct them to use the /search <query> command — "
-            "the results will be injected into their next message. "
-            "Do NOT ask 'would you like me to search', narrate a search, or fabricate search results."
+            "You have a web search tool. When you need current information to answer the user, "
+            "emit exactly this tag on its own and nothing else: "
+            "<search_query>your search query here</search_query>. "
+            "The system will run the search automatically and re-prompt you with the results. "
+            "Do NOT narrate, simulate, or fabricate a search. Do NOT ask the user to search."
         )
     if guide:
         context_base = [guide, *context_base]
@@ -691,6 +691,56 @@ async def _run_chat(
             except PriestError as exc:
                 err_console.print(f"\n[red]Error:[/red] {exc.code}: {escape(exc.message)}")
                 continue
+
+            # --- Agentic search loop ---
+            # If the model emitted only <search_query>…</search_query> (nothing visible),
+            # run the search automatically and re-stream with results injected.
+            if config.web_search.enabled and stripper.search_query and not header_printed:
+                query = stripper.search_query.strip()
+                console.print(f"[dim]Searching: {query}…[/dim]")
+                # Remove probe exchange so history stays clean for the real answer.
+                if request.session:
+                    await pop_last_exchange(store, request.session.id)
+                try:
+                    from priests.search import search as _do_search
+                    search_results = _do_search(query, config.web_search.max_results)
+                except Exception as _se:
+                    search_results = f"Search failed: {_se}"
+
+                search_request = PriestRequest(
+                    config=priest_config,
+                    profile=profile,
+                    prompt=raw,
+                    session=session_ref,
+                    context=turn_context,
+                    user_context=[search_results],
+                    images=images,
+                )
+                header_printed = False
+                stripper = StreamingStripper()
+                try:
+                    async for chunk in engine.stream(search_request):
+                        safe = stripper.feed(chunk)
+                        if not header_printed:
+                            safe = safe.lstrip("\n")
+                        if safe:
+                            if not header_printed:
+                                _sys.stdout.write(f"{_BOLD}{profile} >{_RESET} ")
+                                header_printed = True
+                            _sys.stdout.write(safe)
+                            _sys.stdout.flush()
+                    tail = stripper.flush()
+                    if not header_printed:
+                        tail = tail.lstrip("\n")
+                    if tail:
+                        if not header_printed:
+                            _sys.stdout.write(f"{_BOLD}{profile} >{_RESET} ")
+                            header_printed = True
+                        _sys.stdout.write(tail)
+                        _sys.stdout.flush()
+                except PriestError as exc:
+                    err_console.print(f"\n[red]Error:[/red] {exc.code}: {escape(exc.message)}")
+                request = search_request  # use for clean_last_turn below
 
             if not header_printed:
                 _sys.stdout.write(f"{_BOLD}{profile} >{_RESET}\n")

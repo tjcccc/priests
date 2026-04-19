@@ -22,12 +22,20 @@ SENTINEL_FILE = ".last_consolidated"
 # Open-tag prefixes (lowercase) used for detection
 _OPEN_APPEND = "<memory_append"
 _OPEN_CONSOLIDATION = "<memory_consolidation"
+_OPEN_SEARCH = "<search_query"
 _CLOSE_APPEND = "</memory_append>"
 _CLOSE_CONSOLIDATION = "</memory_consolidation>"
+_CLOSE_SEARCH = "</search_query>"
+
+_CLOSE_TAG: dict[str, str] = {
+    "append": _CLOSE_APPEND,
+    "consolidation": _CLOSE_CONSOLIDATION,
+    "search": _CLOSE_SEARCH,
+}
 
 
 class StreamingStripper:
-    """State-machine stripper for <memory_append> and <memory_consolidation> blocks.
+    """State-machine stripper for <memory_append>, <memory_consolidation>, and <search_query> blocks.
 
     Tolerates any whitespace or attributes inside the opening tag (e.g. the
     model adding a newline between ``<memory_append`` and ``>``).  Blocks must
@@ -35,16 +43,17 @@ class StreamingStripper:
     seen, buffering stops and everything is streamed live.
 
     Call feed() for each streamed chunk; call flush() once after the stream
-    ends.  The captured JSON payloads are available as append_json and
-    consolidation_json after flush().
+    ends.  The captured payloads are available as append_json, consolidation_json,
+    and search_query after flush().
     """
 
     def __init__(self) -> None:
         self._buf = ""          # accumulated text not yet safe to emit
-        self._in_block: str | None = None   # "append" or "consolidation"
+        self._in_block: str | None = None   # "append", "consolidation", or "search"
         self._block_content: list[str] = [] # raw chars inside current block
         self.append_json: str | None = None
         self.consolidation_json: str | None = None
+        self.search_query: str | None = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -61,7 +70,11 @@ class StreamingStripper:
         best_start = len(text)
         best_end = -1
 
-        for btype, prefix in (("append", _OPEN_APPEND), ("consolidation", _OPEN_CONSOLIDATION)):
+        for btype, prefix in (
+            ("append", _OPEN_APPEND),
+            ("consolidation", _OPEN_CONSOLIDATION),
+            ("search", _OPEN_SEARCH),
+        ):
             pos = lo.find(prefix)
             if pos == -1:
                 continue
@@ -76,7 +89,7 @@ class StreamingStripper:
 
     def _find_close(self, text: str, block_type: str) -> int:
         """Return index just after the closing tag, or -1 if not present."""
-        close_tag = _CLOSE_APPEND if block_type == "append" else _CLOSE_CONSOLIDATION
+        close_tag = _CLOSE_TAG[block_type]
         pos = text.lower().find(close_tag)
         if pos == -1:
             return -1
@@ -86,8 +99,10 @@ class StreamingStripper:
         payload = content.strip()
         if block_type == "append":
             self.append_json = payload
-        else:
+        elif block_type == "consolidation":
             self.consolidation_json = payload
+        else:
+            self.search_query = payload
 
     # ------------------------------------------------------------------
     # Public API
@@ -128,7 +143,7 @@ class StreamingStripper:
                     # Closing tag not yet seen — keep buffering
                     break
                 # Capture content before the closing tag
-                close_tag = _CLOSE_APPEND if self._in_block == "append" else _CLOSE_CONSOLIDATION
+                close_tag = _CLOSE_TAG[self._in_block]
                 close_start = self._buf.lower().find(close_tag)
                 self._block_content.append(self._buf[:close_start])
                 self._save_block(self._in_block, "".join(self._block_content))
@@ -332,3 +347,19 @@ async def clean_last_turn(store, session_id: str) -> None:
     ):
         session.turns[-1] = dataclasses.replace(last, content=_strip_memory_blocks(last.content))
         await store.save(session)
+
+
+async def pop_last_exchange(store, session_id: str) -> None:
+    """Remove the last user+assistant turn pair from the session.
+
+    Used after an agentic search-probe pass so the probe exchange is not
+    part of history when the model answers with real search results.
+    """
+    session = await store.get(session_id)
+    if not session or not session.turns:
+        return
+    if session.turns[-1].role == "assistant":
+        session.turns.pop()
+    if session.turns and session.turns[-1].role == "user":
+        session.turns.pop()
+    await store.save(session)

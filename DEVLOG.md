@@ -2,10 +2,20 @@
 
 ## TODO
 
-- **Auto-search agentic loop:** Model emits `<search_query>…</search_query>` when it needs current info; CLI intercepts, runs search, cleans the search-intent turn from session history, re-prompts with results — transparent to the user.
 - **Image support in service API:** Add `images: list[str]` (base64 or URLs) to `RunRequest`; pass through to `PriestRequest` once `priest-core` exposes an image field. Unblocked by `priest-core` upstream. CLI gets `/image <path>` slash command at the same time. Frontends can then send images via `/v1/run` and `/v1/chat` without priests needing its own UI.
 - **SSE streaming for service routes:** `/v1/run` and `/v1/chat` currently return full responses; add SSE variants so frontend clients get streamed output without polling.
 - **Service layer test coverage:** `TestClient`-based tests for `/run` and `/chat` routes with mocked engine and session store.
+
+---
+
+## 2026-04-19 — v0.9.0 — agentic auto-search loop
+
+- **Auto-search agentic loop**: When the user asks for current information, the model now emits `<search_query>QUERY</search_query>`; the CLI intercepts it, runs the search automatically, pops the probe exchange from session history, and re-prompts the model with the results — transparent to the user, like ChatGPT search
+- `StreamingStripper` extended to capture `<search_query>` blocks (same state-machine as `memory_append`/`memory_consolidation`)
+- `pop_last_exchange()` added to `extractor.py` — removes the last user+assistant turn pair so the search-probe exchange doesn't pollute conversation history
+- Web search system prompt updated: model now emits the tag instead of directing the user to `/search`
+- The manual `/search <query>` slash command still works for explicit user-driven searches
+- Updated TODO: auto-search agentic loop is done; removed from backlog
 
 ---
 
@@ -14,7 +24,7 @@
 - Adapted to `priest-core` v2.0.0 API: renamed `system_context` → `context`, `extra_context` → `user_context`; forwarded new `memory` and `max_system_chars` fields through CLI and service schemas/routes
 - Updated `RunRequest` schema (`priests/service/schemas.py`) with `memory`, `user_context`, `max_system_chars`, and backward-compat `system_context` shim
 - Fixed `_build_priest_request` in `routes/run.py` to merge `system_context` + `context` → `context`, and pass `memory`/`user_context`/`max_system_chars` to `PriestRequest`
-- **Fixed hallucinated search**: Strengthened web search context hint to explicitly state the model has no search tool; it must direct the user to `/search <query>` instead of offering to search or narrating a fake search
+- Fixed hallucinated search: strengthened web search context hint to explicitly state the model has no search tool
 
 ---
 
