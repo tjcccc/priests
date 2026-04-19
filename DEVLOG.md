@@ -1,10 +1,10 @@
 # DEVLOG
 
-## TODO
+## 2026-04-19 — v0.12.0 — service image support, SSE streaming, test coverage
 
-- **Image support in service API:** Add `images: list[str]` (base64 or URLs) to `RunRequest`; pass through to `PriestRequest` once `priest-core` exposes an image field. Unblocked by `priest-core` upstream. CLI gets `/image <path>` slash command at the same time. Frontends can then send images via `/v1/run` and `/v1/chat` without priests needing its own UI.
-- **SSE streaming for service routes:** `/v1/run` and `/v1/chat` currently return full responses; add SSE variants so frontend clients get streamed output without polling.
-- **Service layer test coverage:** `TestClient`-based tests for `/run` and `/chat` routes with mocked engine and session store.
+- **Image forwarding**: `RunRequest` now accepts `images: list[ImageIn]` (url or base64 data); forwarded to `PriestRequest` as `ImageInput` objects for all `/v1/run` and `/v1/chat` routes
+- **SSE streaming routes**: `/v1/run/stream` and `/v1/chat/stream` return `text/event-stream`; each chunk is `data: {"delta": "..."}`, terminal event is `data: [DONE]`; `StreamingStripper` handles memory-block filtering mid-stream; memory consolidation/append/trim runs post-stream
+- **Service tests**: `tests/test_service.py` with 10 `TestClient`-based tests covering run, chat, SSE stream, image forwarding, error handling, and session behaviour (mocked engine + store)
 
 ---
 

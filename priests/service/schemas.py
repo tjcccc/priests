@@ -3,7 +3,22 @@ from __future__ import annotations
 from datetime import datetime
 
 from priest.schema.request import OutputSpec
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+
+
+class ImageIn(BaseModel):
+    """Image attachment for the HTTP API. Accepts url or base64 data (no local paths)."""
+    url: str | None = None
+    data: str | None = None  # base64-encoded bytes
+    media_type: str = "image/jpeg"
+
+    @model_validator(mode="after")
+    def _check_source(self) -> "ImageIn":
+        if not self.url and not self.data:
+            raise ValueError("ImageIn requires url or data")
+        if self.url and self.data:
+            raise ValueError("ImageIn: provide url or data, not both")
+        return self
 
 
 class RunRequest(BaseModel):
@@ -23,6 +38,7 @@ class RunRequest(BaseModel):
     max_system_chars: int | None = None
     no_think: bool = False
     max_output_tokens: int | None = None
+    images: list[ImageIn] = []
     output: OutputSpec = OutputSpec()
     metadata: dict = {}
 
