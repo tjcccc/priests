@@ -1,0 +1,4 @@
+node_modules/
+# Override root gitignore — dist is committed for this demo project
+!dist/
+!dist/**

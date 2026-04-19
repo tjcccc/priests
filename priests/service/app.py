@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from priests import __version__
 from priests.config.model import AppConfig
@@ -10,6 +12,8 @@ from priests.engine_factory import build_engine
 from priests.service.routes.health import router as health_router
 from priests.service.routes.run import router as run_router
 from priests.service.routes.sessions import router as session_router
+
+_UI_DIST = Path(__file__).parent.parent / "ui" / "dist"
 
 
 def create_app(config: AppConfig) -> FastAPI:
@@ -35,5 +39,8 @@ def create_app(config: AppConfig) -> FastAPI:
     app.include_router(health_router, tags=["health"])
     app.include_router(run_router, prefix="/v1", tags=["run"])
     app.include_router(session_router, prefix="/v1", tags=["sessions"])
+
+    if _UI_DIST.exists():
+        app.mount("/ui", StaticFiles(directory=str(_UI_DIST), html=True), name="ui")
 
     return app

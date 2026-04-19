@@ -1,5 +1,18 @@
 # DEVLOG
 
+## 2026-04-19 — v0.14.0 — integrated web UI
+
+- React 18 + TypeScript + Vite + Tailwind CSS v4 single-page UI at `priests/ui/`
+- Apple-style design: frosted-glass sidebar, profile/session tree, streaming chat area, input with Thinking toggle
+- Sidebar: profiles derived from `/v1/sessions` grouped by `profile_name`; per-profile New Session button
+- Chat: load turns from `/v1/sessions/{id}`; stream responses via `/v1/chat/stream` SSE; markdown rendering; copy button
+- Session generated client-side UUID sent with `create_session_if_missing: true`; sessions list reloads after each turn
+- Built `dist/` committed; FastAPI mounts at `/ui` via `StaticFiles(html=True)` — served on the same port as the API
+- Config button visible but disabled (deferred until backend config APIs exist)
+- Validation: 15 service tests still pass; UI built clean with `tsc && vite build`
+
+---
+
 ## 2026-04-19 — v0.13.0 — service command daemon mode + test hardening
 
 - `priests service` / `priests service start` run foreground by default (live terminal output)
