@@ -1,5 +1,18 @@
 # DEVLOG
 
+## 2026-04-20 — v0.15.0 — session management, URL routing, turn metadata
+
+- **Session context menu**: 3-dot button on each sidebar session (visible on hover); fixed-position dropdown (escapes sidebar overflow) with Pin, Rename, Delete actions
+- **Pin**: toggles `session_pinned:{id}` in `ui_meta`; pinned sessions sorted to top with 📌 indicator; `PUT /v1/ui/sessions/{id}/pin` (toggle)
+- **Rename**: modal pre-filled with current title or `formatTs(created_at)` fallback; `PUT /v1/ui/sessions/{id}/title` (existing endpoint)
+- **Delete**: confirmation dialog; `DELETE /v1/sessions/{id}` — removes session, turns, uploads, turn_meta, ui_meta keys, and upload files + directory from disk
+- **URL routing**: React Router v6; routes `/` → redirect, `/ui` (home), `/ui/session/:sessionId` (chat), `/ui/config` (stub); session select and new-session both push URL; refreshing a session URL auto-loads the session
+- **SPA refresh fix**: replaced `StaticFiles(html=True)` at `/` with explicit SPA catch-all routes (`/`, `/ui`, `/ui/{path:path}`) + `/assets` StaticFiles mount; deep-path refresh no longer 404s
+- **Turn metadata persistence**: `turn_meta` table `(session_id, turn_timestamp, model, elapsed_ms)`; all 4 route handlers and SSE generator now time each response and call `save_turn_meta`; `GET /v1/sessions/{id}` joins turn_meta and includes model/elapsed in each `TurnOut`; assistant footer survives page refresh
+- **Image accumulation fix**: removed `sessionImageUUIDs` accumulation; `upload_uuids` in `sendMessage` now only contains the current pending message's images, not all prior turns'
+
+---
+
 ## 2026-04-19 — image persistence + API fixes
 
 - **Backend upload storage**: `POST /v1/uploads`, `GET /v1/uploads/{uuid}`, `GET /v1/sessions/{id}/uploads`; files saved to `~/.priests/uploads/{session_id}/{uuid}.{ext}` with Pillow compression (try/except fallback); `uploads` table in `sessions.db` with `turn_timestamp` set after each turn via `update_turn_timestamps`

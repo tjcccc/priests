@@ -8,12 +8,15 @@ export interface SessionSummary {
   created_at: string
   updated_at: string
   turn_count: number
+  pinned: boolean
 }
 
 export interface Turn {
   role: string
   content: string
   timestamp: string
+  model?: string
+  elapsed_ms?: number
 }
 
 export interface SessionDetail {
@@ -27,6 +30,7 @@ export interface SessionDetail {
 export interface UIMeta {
   session_titles: Record<string, string>
   profile_emojis: Record<string, string>
+  pinned_sessions: string[]
 }
 
 export interface ModelOption {
@@ -85,11 +89,21 @@ export async function fetchSession(id: string): Promise<SessionDetail> {
 export async function fetchUIMeta(): Promise<UIMeta> {
   try {
     const r = await fetch('/v1/ui/meta')
-    if (!r.ok) return { session_titles: {}, profile_emojis: {} }
+    if (!r.ok) return { session_titles: {}, profile_emojis: {}, pinned_sessions: [] }
     return r.json()
   } catch {
-    return { session_titles: {}, profile_emojis: {} }
+    return { session_titles: {}, profile_emojis: {}, pinned_sessions: [] }
   }
+}
+
+export async function deleteSession(id: string): Promise<void> {
+  await fetch(`/v1/sessions/${id}`, { method: 'DELETE' })
+}
+
+export async function pinSession(id: string): Promise<{ pinned: boolean }> {
+  const r = await fetch(`/v1/ui/sessions/${id}/pin`, { method: 'PUT' })
+  if (!r.ok) throw new Error(`Pin failed: ${r.status}`)
+  return r.json()
 }
 
 export async function putSessionTitle(id: string, title: string): Promise<void> {

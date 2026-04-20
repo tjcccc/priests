@@ -36,10 +36,10 @@ async def _upsert(db_path: str, key: str, value: str) -> None:
 
 @router.get("/ui/meta")
 async def get_ui_meta(request: Request) -> dict:
-    """Return all custom session titles and profile emojis."""
+    """Return all custom session titles, profile emojis, and pinned session IDs."""
     db_path = str(request.app.state.db_path)
     await _ensure_table(db_path)
-    result: dict = {"session_titles": {}, "profile_emojis": {}}
+    result: dict = {"session_titles": {}, "profile_emojis": {}, "pinned_sessions": []}
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT key, value FROM ui_meta")
@@ -49,6 +49,8 @@ async def get_ui_meta(request: Request) -> dict:
                 result["session_titles"][key[14:]] = value
             elif key.startswith("profile_emoji:"):
                 result["profile_emojis"][key[14:]] = value
+            elif key.startswith("session_pinned:"):
+                result["pinned_sessions"].append(key[15:])
     return result
 
 
@@ -67,6 +69,27 @@ async def set_session_title(session_id: str, body: TitleIn, request: Request) ->
 
 class EmojiIn(BaseModel):
     emoji: str
+
+
+@router.put("/ui/sessions/{session_id}/pin")
+async def toggle_session_pin(session_id: str, request: Request) -> dict:
+    """Toggle pin for a session. Returns {pinned: bool}."""
+    db_path = str(request.app.state.db_path)
+    await _ensure_table(db_path)
+    key = f"session_pinned:{session_id}"
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute("SELECT value FROM ui_meta WHERE key = ?", (key,))
+        row = await cursor.fetchone()
+        if row:
+            await db.execute("DELETE FROM ui_meta WHERE key = ?", (key,))
+            await db.commit()
+            return {"pinned": False}
+        else:
+            await db.execute(
+                "INSERT INTO ui_meta (key, value) VALUES (?, ?)", (key, "true")
+            )
+            await db.commit()
+            return {"pinned": True}
 
 
 @router.put("/ui/profiles/{profile_name}/emoji")

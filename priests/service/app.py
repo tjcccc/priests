@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from priests import __version__
@@ -49,6 +50,14 @@ def create_app(config: AppConfig) -> FastAPI:
     app.include_router(uploads_router, prefix="/v1", tags=["uploads"])
 
     if _UI_DIST.exists():
-        app.mount("/", StaticFiles(directory=str(_UI_DIST), html=True), name="ui")
+        # Serve static assets (JS/CSS/images) from dist/
+        app.mount("/assets", StaticFiles(directory=str(_UI_DIST / "assets")), name="assets")
+
+        # SPA catch-all: serve index.html for all /ui/* navigation paths
+        @app.get("/")
+        @app.get("/ui")
+        @app.get("/ui/{path:path}")
+        async def serve_spa(path: str = "") -> FileResponse:
+            return FileResponse(str(_UI_DIST / "index.html"))
 
     return app

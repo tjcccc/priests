@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { marked } from 'marked'
 import {
   fetchSessions, fetchSession, fetchUIMeta, fetchModels,
   putSessionTitle, putProfileEmoji, streamChat, uploadImage, fetchSessionUploads,
+  deleteSession, pinSession,
   SessionSummary, UIMeta, ModelsConfig, StreamMeta,
 } from './api'
 
@@ -124,16 +126,26 @@ function EmojiPicker({ onPick, onClose }: { onPick: (e: string) => void; onClose
 // ---------------------------------------------------------------------------
 
 export default function App() {
+  const navigate = useNavigate()
+  const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>()
+
   // Session list
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [selectedProfile, setSelectedProfile] = useState<string>('default')
   const [selectedSession, setSelectedSession] = useState<SessionSummary | null>(null)
 
+  // Session context menu
+  const [menuSessionId, setMenuSessionId] = useState<string | null>(null)
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+  const [renameSession, setRenameSession] = useState<SessionSummary | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
+
   // Stable UUID for a new session before first send
   const [pendingSessionId, setPendingSessionId] = useState<string>(() => crypto.randomUUID())
 
   // Server-side UI meta (titles + emojis)
-  const [uiMeta, setUiMeta] = useState<UIMeta>({ session_titles: {}, profile_emojis: {} })
+  const [uiMeta, setUiMeta] = useState<UIMeta>({ session_titles: {}, profile_emojis: {}, pinned_sessions: [] })
 
   // Header: title editing
   const [editingTitle, setEditingTitle] = useState(false)
@@ -152,9 +164,6 @@ export default function App() {
   // Files — attached for current turn
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
-
-  // UUIDs of all uploads sent in this session so far (for image context accumulation)
-  const [sessionImageUUIDs, setSessionImageUUIDs] = useState<string[]>([])
 
   // Model selection
   const [modelsConfig, setModelsConfig] = useState<ModelsConfig | null>(null)
@@ -215,6 +224,17 @@ export default function App() {
     fetchModels().then(setModelsConfig)
   }, [loadSessions])
 
+  // Auto-select session from URL on initial load
+  useEffect(() => {
+    if (!urlSessionId) return
+    const allSessions = profiles.flatMap(p => p.sessions)
+    const found = allSessions.find(s => s.id === urlSessionId)
+    if (found && found.id !== selectedSession?.id) {
+      selectSession(found)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlSessionId, profiles])
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streamingContent])
@@ -227,7 +247,7 @@ export default function App() {
     setSelectedProfile(session.profile_name)
     setSelectedSession(session)
     setAttachedImages([])
-    setSessionImageUUIDs([])
+    navigate(`/ui/session/${session.id}`, { replace: true })
     try {
       const [detail, uploads] = await Promise.all([
         fetchSession(session.id),
@@ -235,7 +255,6 @@ export default function App() {
       ])
 
       // Build a map: turn_timestamp (ms) → upload URL list
-      // Timestamps from the DB use the same clock, so normalizing to ms is safe
       const byTurnMs = new Map<number, string[]>()
       for (const [ts, items] of Object.entries(uploads.by_turn)) {
         if (ts === '__pending__') continue
@@ -245,16 +264,12 @@ export default function App() {
         }
       }
 
-      // Collect all known upload UUIDs as session context
-      const allUUIDs = Object.entries(uploads.by_turn)
-        .filter(([ts]) => ts !== '__pending__')
-        .flatMap(([, items]) => items.map(u => u.uuid))
-      setSessionImageUUIDs(allUUIDs)
-
       setMessages(detail.turns.map(t => ({
         role: t.role as 'user' | 'assistant',
         content: t.content,
         timestamp: t.timestamp,
+        model: t.model,
+        elapsed_ms: t.elapsed_ms,
         imagePreviews: byTurnMs.get(tsMs(t.timestamp)),
       })))
     } catch (e) {
@@ -262,13 +277,70 @@ export default function App() {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Session context menu actions
+  // ---------------------------------------------------------------------------
+
+  const openSessionMenu = (e: React.MouseEvent, session: SessionSummary) => {
+    e.stopPropagation()
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setMenuPos({ x: rect.right + 4, y: rect.top })
+    setMenuSessionId(prev => prev === session.id ? null : session.id)
+  }
+
+  const closeMenu = () => setMenuSessionId(null)
+
+  const handlePin = async (session: SessionSummary) => {
+    closeMenu()
+    try {
+      await pinSession(session.id)
+      await loadSessions()
+      fetchUIMeta().then(setUiMeta)
+    } catch (e) {
+      console.error('Pin failed', e)
+    }
+  }
+
+  const handleRenameOpen = (session: SessionSummary) => {
+    closeMenu()
+    const currentTitle = uiMeta.session_titles[session.id] || formatTs(session.created_at)
+    setRenameDraft(currentTitle)
+    setRenameSession(session)
+  }
+
+  const handleRenameCommit = async () => {
+    if (!renameSession) return
+    const title = renameDraft.trim()
+    if (title) {
+      await putSessionTitle(renameSession.id, title)
+      fetchUIMeta().then(setUiMeta)
+    }
+    setRenameSession(null)
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteConfirmId) return
+    try {
+      await deleteSession(deleteConfirmId)
+      if (selectedSession?.id === deleteConfirmId) {
+        setSelectedSession(null)
+        setMessages([])
+        navigate('/ui', { replace: true })
+      }
+      await loadSessions()
+    } catch (e) {
+      console.error('Delete failed', e)
+    }
+    setDeleteConfirmId(null)
+  }
+
   const newSession = (profile: string) => {
     setSelectedProfile(profile)
     setSelectedSession(null)
     setMessages([])
-    setSessionImageUUIDs([])
     setAttachedImages([])
     setPendingSessionId(crypto.randomUUID())
+    navigate('/ui', { replace: true })
     textareaRef.current?.focus()
   }
 
@@ -383,7 +455,6 @@ export default function App() {
     const sessionId = selectedSession?.id ?? pendingSessionId
 
     const newUUIDs = attachedImages.map(img => img.uuid).filter(Boolean) as string[]
-    const allUUIDs = [...sessionImageUUIDs, ...newUUIDs]
     const newPreviews = attachedImages.map(img => `/v1/uploads/${img.uuid}`)
     setAttachedImages([])
 
@@ -409,7 +480,7 @@ export default function App() {
         no_think: !thinking,
         provider: activeProvider,
         model: activeModel,
-        upload_uuids: allUUIDs.length ? allUUIDs : undefined,
+        upload_uuids: newUUIDs.length ? newUUIDs : undefined,
       },
       delta => {
         accumulated += delta
@@ -425,15 +496,12 @@ export default function App() {
         }])
         setStreamingContent('')
         setStreaming(false)
-        if (newUUIDs.length) {
-          setSessionImageUUIDs(prev => [...prev, ...newUUIDs])
-        }
         loadSessions().then(sessions => {
           if (isNew) {
             const found = sessions.find(s => s.id === sessionId)
             if (found) {
               setSelectedSession(found)
-              // pendingSessionId stays; newSession() will reset it when needed
+              navigate(`/ui/session/${sessionId}`, { replace: true })
             }
           }
         })
@@ -500,17 +568,28 @@ export default function App() {
               {profile.expanded && (
                 <div className="ml-6 mt-1 space-y-0.5">
                   {profile.sessions.map(session => (
-                    <button
-                      key={session.id}
-                      onClick={() => selectSession(session)}
-                      className={`w-full text-left px-2 py-1.5 rounded-md text-[12px] transition-colors truncate ${
-                        selectedSession?.id === session.id
-                          ? 'bg-[#007AFF]/10 text-[#007AFF] font-medium'
-                          : 'text-black/70 hover:bg-black/[0.04] hover:text-black'
-                      }`}
-                    >
-                      {uiMeta.session_titles[session.id] ?? formatTs(session.created_at)}
-                    </button>
+                    <div key={session.id} className="relative group">
+                      <button
+                        onClick={() => selectSession(session)}
+                        className={`w-full text-left px-2 py-1.5 pr-7 rounded-md text-[12px] transition-colors truncate ${
+                          selectedSession?.id === session.id
+                            ? 'bg-[#007AFF]/10 text-[#007AFF] font-medium'
+                            : 'text-black/70 hover:bg-black/[0.04] hover:text-black'
+                        }`}
+                      >
+                        {session.pinned && <span className="mr-1 text-[10px]">📌</span>}
+                        {uiMeta.session_titles[session.id] ?? formatTs(session.created_at)}
+                      </button>
+                      <button
+                        onClick={e => openSessionMenu(e, session)}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-black/[0.08] text-black/40 transition-opacity"
+                        title="Session options"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 16 16">
+                          <circle cx="8" cy="3" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="8" cy="13" r="1.2"/>
+                        </svg>
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}
@@ -520,9 +599,9 @@ export default function App() {
 
         <div className="p-3 border-t border-black/[0.06]">
           <button
-            disabled
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-black/30 cursor-not-allowed"
-            title="Configuration — coming soon"
+            onClick={() => navigate('/ui/config')}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-black/40 hover:bg-black/[0.04] hover:text-black/60 transition-colors"
+            title="Configuration"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
               <path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18" strokeLinecap="round" strokeLinejoin="round" />
@@ -752,7 +831,6 @@ export default function App() {
                       onChange={e => {
                         const p = e.target.value
                         setSelectedProvider(p)
-                        setSessionImageUUIDs([])
                         const first = (modelsConfig?.configured_options ?? [])
                           .find(o => o.provider === p)?.model ?? null
                         setSelectedModel(first)
@@ -803,6 +881,68 @@ export default function App() {
         </div>
 
       </div>
+
+      {/* ── Session context menu (fixed position to escape sidebar overflow) */}
+      {menuSessionId && (() => {
+        const menuSession = profiles.flatMap(p => p.sessions).find(s => s.id === menuSessionId)
+        if (!menuSession) return null
+        return (
+          <>
+            <div className="fixed inset-0 z-40" onClick={closeMenu} />
+            <div
+              className="fixed z-50 bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.16)] border border-black/[0.06] py-1 w-36"
+              style={{ left: menuPos.x, top: menuPos.y }}
+              onClick={e => e.stopPropagation()}
+            >
+              <button onClick={() => handlePin(menuSession)} className="w-full text-left px-3 py-1.5 text-[12px] text-black/70 hover:bg-black/[0.04]">
+                {menuSession.pinned ? '📌 Unpin' : '📌 Pin'}
+              </button>
+              <button onClick={() => handleRenameOpen(menuSession)} className="w-full text-left px-3 py-1.5 text-[12px] text-black/70 hover:bg-black/[0.04]">
+                ✏️ Rename
+              </button>
+              <div className="my-1 border-t border-black/[0.06]" />
+              <button onClick={() => { closeMenu(); setDeleteConfirmId(menuSession.id) }} className="w-full text-left px-3 py-1.5 text-[12px] text-red-500 hover:bg-red-50">
+                🗑 Delete
+              </button>
+            </div>
+          </>
+        )
+      })()}
+
+      {/* ── Rename modal ─────────────────────────────────────────── */}
+      {renameSession && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.18)] p-6 w-[360px]">
+            <h3 className="text-[15px] font-semibold text-black mb-4">Rename Session</h3>
+            <input
+              autoFocus
+              value={renameDraft}
+              onChange={e => setRenameDraft(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleRenameCommit(); if (e.key === 'Escape') setRenameSession(null) }}
+              className="w-full px-3 py-2 rounded-lg border border-black/[0.12] text-[13px] outline-none focus:ring-2 focus:ring-[#007AFF]/30 mb-4"
+            />
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setRenameSession(null)} className="px-4 py-2 rounded-lg text-[13px] text-black/60 hover:bg-black/[0.04]">Cancel</button>
+              <button onClick={handleRenameCommit} className="px-4 py-2 rounded-lg text-[13px] bg-[#007AFF] text-white hover:bg-[#0066CC]">Rename</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete confirmation modal ─────────────────────────────── */}
+      {deleteConfirmId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.18)] p-6 w-[360px]">
+            <h3 className="text-[15px] font-semibold text-black mb-2">Delete Session?</h3>
+            <p className="text-[13px] text-black/50 mb-5">This will permanently delete the session and all its uploaded images. This cannot be undone.</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setDeleteConfirmId(null)} className="px-4 py-2 rounded-lg text-[13px] text-black/60 hover:bg-black/[0.04]">Cancel</button>
+              <button onClick={handleDeleteConfirm} className="px-4 py-2 rounded-lg text-[13px] bg-red-500 text-white hover:bg-red-600">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }

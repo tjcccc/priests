@@ -48,6 +48,8 @@ class TurnOut(BaseModel):
     role: str
     content: str
     timestamp: datetime
+    model: str | None = None
+    elapsed_ms: int | None = None
 
 
 class SessionSummary(BaseModel):
@@ -56,6 +58,7 @@ class SessionSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     turn_count: int
+    pinned: bool = False
 
 
 class SessionDetail(BaseModel):

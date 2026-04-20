@@ -32,6 +32,16 @@ CREATE TABLE IF NOT EXISTS uploads (
 )
 """
 
+_CREATE_TURN_META = """
+CREATE TABLE IF NOT EXISTS turn_meta (
+    session_id      TEXT NOT NULL,
+    turn_timestamp  TEXT NOT NULL,
+    model           TEXT,
+    elapsed_ms      INTEGER,
+    PRIMARY KEY (session_id, turn_timestamp)
+)
+"""
+
 
 def _compress(data: bytes, media_type: str) -> bytes:
     try:
@@ -50,7 +60,25 @@ def _compress(data: bytes, media_type: str) -> bytes:
 async def ensure_uploads_table(db_path: str) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute(_CREATE_UPLOADS)
+        await db.execute(_CREATE_TURN_META)
         await db.commit()
+
+
+async def save_turn_meta(db_path: str, session_id: str, model: str, elapsed_ms: int) -> None:
+    """Record model and timing for the last assistant turn in a session."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT timestamp FROM turns WHERE session_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        )
+        row = await cursor.fetchone()
+        if row:
+            await db.execute(
+                "INSERT OR REPLACE INTO turn_meta (session_id, turn_timestamp, model, elapsed_ms) VALUES (?,?,?,?)",
+                (session_id, row["timestamp"], model, elapsed_ms),
+            )
+            await db.commit()
 
 
 async def update_turn_timestamps(db_path: str, session_id: str, upload_uuids: list[str]) -> None:

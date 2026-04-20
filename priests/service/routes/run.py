@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
@@ -21,7 +22,7 @@ from priests.memory.extractor import (
     trim_memories,
 )
 from priests.profile.config import load_profile_config
-from priests.service.routes.uploads import load_upload_images, update_turn_timestamps
+from priests.service.routes.uploads import load_upload_images, save_turn_meta, update_turn_timestamps
 from priests.service.schemas import RunRequest
 
 router = APIRouter()
@@ -129,6 +130,12 @@ async def _apply_memory(
     return response.model_copy(update={"text": _strip_memory_blocks(text)})
 
 
+def _model_label(req) -> str:
+    provider = req.config.provider or "default"
+    model = req.config.model or "default"
+    return f"{provider}/{model}"
+
+
 @router.post("/run", response_model=PriestResponse)
 async def run_once(body: RunRequest, request: Request, memories: bool = True) -> PriestResponse:
     """Single run — no session required. Pass ?memories=false to disable memory loading and saving."""
@@ -139,11 +146,16 @@ async def run_once(body: RunRequest, request: Request, memories: bool = True) ->
     upload_images = await load_upload_images(db_path, body.upload_uuids)
     priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images)
     store = request.app.state.store
+    t0 = time.monotonic()
     response = await engine.run(priest_request)
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
     if not response.ok:
         raise HTTPException(status_code=500, detail={"code": response.error.code, "message": response.error.message})
-    if body.upload_uuids and priest_request.session:
-        await update_turn_timestamps(db_path, priest_request.session.id, body.upload_uuids)
+    if priest_request.session:
+        sid = priest_request.session.id
+        if body.upload_uuids:
+            await update_turn_timestamps(db_path, sid, body.upload_uuids)
+        await save_turn_meta(db_path, sid, _model_label(priest_request), elapsed_ms)
     return await _apply_memory(response, body, config, store, memories=memories)
 
 
@@ -161,11 +173,16 @@ async def chat(body: RunRequest, request: Request, memories: bool = True) -> Pri
     guide = load_global_guide(config)
     upload_images = await load_upload_images(db_path, body.upload_uuids)
     priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images)
+    t0 = time.monotonic()
     response = await engine.run(priest_request)
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
     if not response.ok:
         raise HTTPException(status_code=500, detail={"code": response.error.code, "message": response.error.message})
-    if body.upload_uuids and priest_request.session:
-        await update_turn_timestamps(db_path, priest_request.session.id, body.upload_uuids)
+    if priest_request.session:
+        sid = priest_request.session.id
+        if body.upload_uuids:
+            await update_turn_timestamps(db_path, sid, body.upload_uuids)
+        await save_turn_meta(db_path, sid, _model_label(priest_request), elapsed_ms)
     return await _apply_memory(response, body, config, store, memories=memories)
 
 
@@ -175,6 +192,7 @@ async def _sse_generator(body: RunRequest, config: AppConfig, engine, store, db_
     upload_images = await load_upload_images(db_path, body.upload_uuids)
     priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images)
     stripper = StreamingStripper()
+    t0 = time.monotonic()
 
     try:
         async for chunk in engine.stream(priest_request):
@@ -190,12 +208,15 @@ async def _sse_generator(body: RunRequest, config: AppConfig, engine, store, db_
         yield f"data: {json.dumps({'error': {'code': code, 'message': msg}})}\n\n"
         return
 
-    # Post-stream: update upload turn timestamps, then handle memory
-    if body.upload_uuids and priest_request.session:
-        await update_turn_timestamps(db_path, priest_request.session.id, body.upload_uuids)
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
 
+    # Post-stream: update upload turn timestamps, then handle memory
     if priest_request.session:
-        await clean_last_turn(store, priest_request.session.id)
+        sid = priest_request.session.id
+        if body.upload_uuids:
+            await update_turn_timestamps(db_path, sid, body.upload_uuids)
+        await clean_last_turn(store, sid)
+        await save_turn_meta(db_path, sid, _model_label(priest_request), elapsed_ms)
 
     if memories:
         profile_cfg = load_profile_config(config.paths.profiles_dir, body.profile)
