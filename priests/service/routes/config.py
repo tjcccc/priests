@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel  # noqa: F401 (used by inline schema classes below)
 
@@ -53,7 +54,8 @@ def _config_to_response(config: AppConfig) -> ConfigResponse:
     # OpenAI-compat providers
     compat_providers = [
         "openai", "gemini", "bailian", "alibaba_cloud", "minimax", "deepseek",
-        "kimi", "groq", "openrouter", "mistral", "together", "perplexity", "cohere", "custom",
+        "kimi", "groq", "openrouter", "mistral", "together", "perplexity", "cohere",
+        "github_copilot", "custom",
     ]
     for name in compat_providers:
         cfg = getattr(p, name, None)
@@ -75,6 +77,7 @@ def _config_to_response(config: AppConfig) -> ConfigResponse:
             needs_api_key=v.needs_api_key,
             default_base_url=v.default_base_url,
             known_models=v.known_models,
+            provider_type=v.provider_type,
         )
         for k, v in REGISTRY.items()
     ]
@@ -157,6 +160,45 @@ async def patch_config(body: ConfigPatchRequest, request: Request) -> ConfigPatc
     request.app.state.config = updated
 
     return ConfigPatchResponse(needs_restart=needs_restart)
+
+
+@router.get("/providers/{name}/models")
+async def get_provider_models(name: str, request: Request) -> list[str]:
+    """Fetch available models for a provider. For local providers, queries the running server.
+    For API/OAuth providers, returns the known_models list from the registry.
+    Returns [] on timeout or error.
+    """
+    info = REGISTRY.get(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {name!r}")
+
+    if info.provider_type != "local":
+        return info.known_models or []
+
+    config: AppConfig = request.app.state.config
+    p = config.providers
+
+    try:
+        if name == "ollama":
+            base_url = p.ollama.base_url
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                r = await client.get(f"{base_url}/api/tags")
+            if r.status_code != 200:
+                return []
+            data = r.json()
+            return [m["name"] for m in data.get("models", [])]
+        elif name in ("llamacpp", "lmstudio"):
+            base_url = p.llamacpp.base_url if name == "llamacpp" else p.lmstudio.base_url
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                r = await client.get(f"{base_url}/v1/models")
+            if r.status_code != 200:
+                return []
+            data = r.json()
+            return [m["id"] for m in data.get("data", [])]
+    except Exception:
+        return []
+
+    return []
 
 
 @router.put("/config/models/options", response_model=ModelOptionsOut)

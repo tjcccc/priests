@@ -99,6 +99,7 @@ class ProviderRegistryItem(BaseModel):
     needs_api_key: bool
     default_base_url: str
     known_models: list[str] | None
+    provider_type: str = "api"
 
 
 class ConfigResponse(BaseModel):

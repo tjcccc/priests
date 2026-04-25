@@ -2,9 +2,28 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   fetchConfig, patchConfig, fetchModels, fetchProfiles, fetchProfileFiles,
-  putProfileFiles, createProfile, putModelOptions,
+  putProfileFiles, createProfile, putModelOptions, fetchProviderModels,
   ConfigData, ProviderRegistryItem, ModelsConfig, ProfileFiles,
 } from './api'
+
+// ---------------------------------------------------------------------------
+// Section nav
+// ---------------------------------------------------------------------------
+
+const SECTIONS = [
+  { id: 'defaults',       label: 'Defaults' },
+  { id: 'profile-config', label: 'Profile Configuration' },
+  { id: 'model-config',   label: 'Model Configuration' },
+  { id: 'providers',      label: 'Providers' },
+  { id: 'memory',         label: 'Memory' },
+  { id: 'web-search',     label: 'Web Search' },
+  { id: 'service',        label: 'Service' },
+  { id: 'paths',          label: 'Paths' },
+] as const
+
+function scrollTo(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -12,8 +31,9 @@ import {
 
 type SectionStatus = 'idle' | 'saving' | 'saved' | 'error'
 interface SectionState { status: SectionStatus; error?: string; needsRestart?: boolean }
-
 interface ModelRow { provider: string; model: string }
+
+const CUSTOM_MODEL = '__custom__'
 
 // ---------------------------------------------------------------------------
 // Primitive helpers
@@ -112,6 +132,88 @@ function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) =>
 }
 
 // ---------------------------------------------------------------------------
+// ModelSelect: dropdown backed by known or dynamically-fetched models
+// Supports a "Custom model name…" fallback text input
+// ---------------------------------------------------------------------------
+
+function ModelSelect({ providerName, knownModels, value, onValueChange }: {
+  providerName: string
+  knownModels: string[] | null   // null = fetch dynamically; [] = free text only
+  value: string
+  onValueChange: (v: string) => void
+}) {
+  const [dynamicModels, setDynamicModels] = useState<string[]>([])
+  const [fetching, setFetching] = useState(false)
+  const [showCustom, setShowCustom] = useState(false)
+
+  const doFetch = useCallback(async () => {
+    setFetching(true)
+    const models = await fetchProviderModels(providerName)
+    setDynamicModels(models)
+    setFetching(false)
+  }, [providerName])
+
+  // Reset state when provider changes
+  useEffect(() => {
+    setDynamicModels([])
+    setShowCustom(false)
+    if (knownModels === null) doFetch()
+  }, [providerName, knownModels, doFetch])
+
+  const effectiveModels = knownModels !== null ? knownModels : dynamicModels
+
+  // If current value is non-empty and not in the list, enter custom mode
+  useEffect(() => {
+    if (value && effectiveModels.length > 0 && !effectiveModels.includes(value)) {
+      setShowCustom(true)
+    }
+  }, [value, effectiveModels])
+
+  // Free text only (together, openrouter, custom endpoint)
+  if (knownModels !== null && knownModels.length === 0) {
+    return (
+      <input type="text" value={value} onChange={e => onValueChange(e.target.value)}
+        placeholder="Model name…" className={inputCls + " flex-1"} />
+    )
+  }
+
+  return (
+    <div className="flex gap-2 flex-1 flex-wrap items-center">
+      <select
+        value={showCustom ? CUSTOM_MODEL : value}
+        onChange={e => {
+          if (e.target.value === CUSTOM_MODEL) {
+            setShowCustom(true)
+            onValueChange('')
+          } else {
+            setShowCustom(false)
+            onValueChange(e.target.value)
+          }
+        }}
+        className={selectCls + " flex-1 min-w-[160px]"}
+      >
+        <option value="">{fetching ? 'Fetching…' : '— select model —'}</option>
+        {effectiveModels.map(m => <option key={m} value={m}>{m}</option>)}
+        <option value={CUSTOM_MODEL}>Custom model name…</option>
+      </select>
+
+      {showCustom && (
+        <input type="text" value={value} onChange={e => onValueChange(e.target.value)}
+          placeholder="Enter model name"
+          className={inputCls + " flex-1 min-w-[140px]"} />
+      )}
+
+      {knownModels === null && !fetching && (
+        <button onClick={doFetch}
+          className="px-2.5 py-1.5 rounded-lg border border-black/[0.08] bg-black/[0.03] text-[12px] text-black/50 hover:bg-black/[0.06] cursor-pointer transition-colors shrink-0">
+          Refresh
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Provider card
 // ---------------------------------------------------------------------------
 
@@ -122,14 +224,21 @@ interface ProviderCardProps {
 }
 
 function ProviderCard({ name, info, baseUrl, apiKey, useProxy, onChange }: ProviderCardProps) {
-  const isLocal = !info.needs_api_key
+  const typeBadge = info.provider_type === 'local'
+    ? 'bg-[#34C759]/10 text-[#34C759]'
+    : info.provider_type === 'oauth'
+    ? 'bg-[#AF52DE]/10 text-[#AF52DE]'
+    : 'bg-[#007AFF]/10 text-[#007AFF]'
+
   return (
     <div className="border border-black/[0.07] rounded-xl p-4 space-y-3">
       <div className="flex items-center gap-2">
         <span className="text-[13px] font-semibold text-black">{info.label}</span>
-        {isLocal && <span className="text-[10px] px-1.5 py-0.5 bg-[#34C759]/10 text-[#34C759] rounded font-medium">local</span>}
+        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${typeBadge}`}>
+          {info.provider_type}
+        </span>
       </div>
-      {(isLocal || name === 'custom' || name === 'openrouter') && (
+      {(info.provider_type === 'local' || name === 'custom' || name === 'openrouter') && (
         <div>
           <p className="text-[11px] text-black/40 mb-1">Base URL</p>
           <TextInput value={baseUrl} onChange={v => onChange('base_url', v)} placeholder={info.default_base_url} />
@@ -155,17 +264,28 @@ function ProviderCard({ name, info, baseUrl, apiKey, useProxy, onChange }: Provi
 // Model Configuration section
 // ---------------------------------------------------------------------------
 
-function ModelConfigSection({ modelsConfig, profileList }: {
-  modelsConfig: ModelsConfig; profileList: string[]
+function ModelConfigSection({ modelsConfig, registry }: {
+  modelsConfig: ModelsConfig; registry: ProviderRegistryItem[]
 }) {
   const [rows, setRows] = useState<ModelRow[]>(() =>
     (modelsConfig.configured_options ?? []).map(o => ({ provider: o.provider, model: o.model }))
   )
-  const [addProvider, setAddProvider] = useState(modelsConfig.providers[0]?.name ?? '')
-  const [addModel, setAddModel] = useState('')
   const [state, setState] = useState<SectionState>({ status: 'idle' })
 
-  const knownModels = modelsConfig.providers.find(p => p.name === addProvider)?.known_models ?? null
+  const localProviders = registry.filter(r => r.provider_type === 'local')
+  const apiProviders   = registry.filter(r => r.provider_type === 'api')
+  const oauthProviders = registry.filter(r => r.provider_type === 'oauth')
+  const allOrdered = [...localProviders, ...apiProviders, ...oauthProviders]
+
+  const [addProvider, setAddProvider] = useState(allOrdered[0]?.name ?? '')
+  const [addModel, setAddModel] = useState('')
+
+  const selectedInfo = registry.find(r => r.name === addProvider) ?? null
+
+  const providerDot = (name: string) => {
+    const t = registry.find(r => r.name === name)?.provider_type
+    return t === 'local' ? 'bg-[#34C759]' : t === 'oauth' ? 'bg-[#AF52DE]' : 'bg-[#007AFF]'
+  }
 
   const addRow = () => {
     const model = addModel.trim()
@@ -190,44 +310,53 @@ function ModelConfigSection({ modelsConfig, profileList }: {
     }
   }
 
-  // unused but satisfies linter for profileList prop used by Defaults section
-  void profileList
-
   return (
-    <section>
-      <SectionHeader title="Model Configuration" action={
-        <button onClick={addRow}
-          className="flex items-center gap-2 bg-[#007AFF] hover:bg-[#0051D5] cursor-pointer text-white px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-            <path d="M12 5v14M5 12h14" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          Add Model
-        </button>
-      } />
-
+    <section id="model-config">
+      <SectionHeader title="Model Configuration" />
       <Card>
         {/* Add-model row */}
-        <div className="px-4 py-3 border-b border-black/[0.06] flex items-center gap-3 flex-wrap">
-          <select value={addProvider} onChange={e => { setAddProvider(e.target.value); setAddModel('') }}
-            className={selectCls + " w-[160px]"}>
-            {modelsConfig.providers.map(p => (
-              <option key={p.name} value={p.name}>{p.label}</option>
-            ))}
-          </select>
-          {knownModels && knownModels.length > 0 ? (
-            <select value={addModel} onChange={e => setAddModel(e.target.value)}
-              className={selectCls + " flex-1 min-w-[180px]"}>
-              <option value="">— select model —</option>
-              {knownModels.map(m => <option key={m} value={m}>{m}</option>)}
+        <div className="px-4 py-3 border-b border-black/[0.06] flex items-end gap-3 flex-wrap">
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] text-black/40 font-semibold uppercase tracking-wide">Provider</span>
+            <select value={addProvider}
+              onChange={e => { setAddProvider(e.target.value); setAddModel('') }}
+              className={selectCls + " w-[220px]"}>
+              {localProviders.length > 0 && (
+                <optgroup label="— Local —">
+                  {localProviders.map(p => <option key={p.name} value={p.name}>{p.label}</option>)}
+                </optgroup>
+              )}
+              {apiProviders.length > 0 && (
+                <optgroup label="— API —">
+                  {apiProviders.map(p => <option key={p.name} value={p.name}>{p.label}</option>)}
+                </optgroup>
+              )}
+              {oauthProviders.length > 0 && (
+                <optgroup label="— OAuth —">
+                  {oauthProviders.map(p => <option key={p.name} value={p.name}>{p.label}</option>)}
+                </optgroup>
+              )}
             </select>
-          ) : (
-            <input type="text" value={addModel} onChange={e => setAddModel(e.target.value)}
-              placeholder="Model name…"
-              onKeyDown={e => e.key === 'Enter' && addRow()}
-              className={inputCls + " flex-1 min-w-[180px]"} />
-          )}
+          </div>
+
+          <div className="flex flex-col gap-1 flex-1 min-w-[200px]">
+            <span className="text-[10px] text-black/40 font-semibold uppercase tracking-wide">Model</span>
+            {selectedInfo ? (
+              <ModelSelect
+                key={addProvider}
+                providerName={addProvider}
+                knownModels={selectedInfo.known_models}
+                value={addModel}
+                onValueChange={setAddModel}
+              />
+            ) : (
+              <input type="text" value={addModel} onChange={e => setAddModel(e.target.value)}
+                placeholder="Model name…" className={inputCls} />
+            )}
+          </div>
+
           <button onClick={addRow} disabled={!addModel.trim()}
-            className="px-3 py-1.5 bg-black/[0.05] hover:bg-black/[0.09] disabled:opacity-40 cursor-pointer rounded-lg text-[13px] font-medium transition-colors shrink-0">
+            className="px-4 py-1.5 bg-[#007AFF] hover:bg-[#0051D5] disabled:bg-black/20 disabled:cursor-not-allowed cursor-pointer text-white rounded-lg text-[13px] font-medium transition-colors shrink-0">
             Add
           </button>
         </div>
@@ -242,17 +371,16 @@ function ModelConfigSection({ modelsConfig, profileList }: {
               <tr className="border-b border-black/[0.06]">
                 <th className="text-left px-4 py-3 text-[12px] font-semibold text-black/50">Provider</th>
                 <th className="text-left px-4 py-3 text-[12px] font-semibold text-black/50">Model</th>
-                <th className="text-right px-4 py-3 text-[12px] font-semibold text-black/50">Actions</th>
+                <th className="text-right px-4 py-3" />
               </tr>
             </thead>
             <tbody>
               {rows.map((row, i) => (
-                <tr key={i} className={`${i < rows.length - 1 ? 'border-b border-black/[0.06]' : ''} hover:bg-black/[0.02] transition-colors`}>
+                <tr key={i}
+                  className={`${i < rows.length - 1 ? 'border-b border-black/[0.06]' : ''} hover:bg-black/[0.02] transition-colors`}>
                   <td className="px-4 py-3 text-[13px] text-black/70">
                     <div className="flex items-center gap-2">
-                      <div className={`w-2 h-2 rounded-full shrink-0 ${
-                        row.provider === 'ollama' || row.provider === 'llamacpp' || row.provider === 'lmstudio'
-                          ? 'bg-[#34C759]' : 'bg-[#007AFF]'}`} />
+                      <div className={`w-2 h-2 rounded-full shrink-0 ${providerDot(row.provider)}`} />
                       {row.provider}
                     </div>
                   </td>
@@ -339,10 +467,10 @@ function ProfileConfigSection({ profileList, onProfileCreated }: {
   }
 
   return (
-    <section>
+    <section id="profile-config">
       <SectionHeader title="Profile Configuration" />
       <Card>
-        <div className="flex h-[620px]">
+        <div className="flex min-h-[680px]">
           {/* Left: profile list */}
           <div className="w-[200px] border-r border-black/[0.06] flex flex-col shrink-0">
             <div className="flex-1 overflow-y-auto p-3 space-y-0.5">
@@ -357,7 +485,7 @@ function ProfileConfigSection({ profileList, onProfileCreated }: {
                 </button>
               ))}
             </div>
-            <div className="p-3 border-t border-black/[0.06] space-y-2">
+            <div className="p-3 border-t border-black/[0.06]">
               <div className="flex gap-1.5">
                 <input type="text" value={newName} onChange={e => setNewName(e.target.value)}
                   placeholder="New profile…"
@@ -374,9 +502,7 @@ function ProfileConfigSection({ profileList, onProfileCreated }: {
           {/* Right: file editors */}
           <div className="flex-1 flex flex-col min-w-0">
             {loading || !files ? (
-              <div className="flex-1 flex items-center justify-center text-[13px] text-black/30">
-                Loading…
-              </div>
+              <div className="flex-1 flex items-center justify-center text-[13px] text-black/30">Loading…</div>
             ) : (
               <>
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -390,12 +516,14 @@ function ProfileConfigSection({ profileList, onProfileCreated }: {
                           </svg>
                           <span className="text-[12px] font-semibold text-black/50">{label}</span>
                         </div>
-                        <textarea value={files[key]} onChange={e => setFiles(f => f ? { ...f, [key]: e.target.value } : f)}
-                          className="w-full h-[120px] bg-black/[0.03] text-[12px] text-black/80 px-3 py-2 rounded-lg border border-black/[0.08] outline-none focus:border-[#007AFF]/50 transition-colors font-mono resize-none" />
+                        <textarea
+                          value={files[key]}
+                          onChange={e => setFiles(f => f ? { ...f, [key]: e.target.value } : f)}
+                          className="w-full h-[160px] bg-black/[0.03] text-[12px] text-black/80 px-3 py-2 rounded-lg border border-black/[0.08] outline-none focus:border-[#007AFF]/50 transition-colors font-mono resize-none"
+                        />
                       </div>
                     )
                   )}
-
                   <div className="pt-2 border-t border-black/[0.06]">
                     <label className="flex items-center justify-between cursor-pointer">
                       <div>
@@ -406,7 +534,6 @@ function ProfileConfigSection({ profileList, onProfileCreated }: {
                     </label>
                   </div>
                 </div>
-
                 <div className="px-4 pb-4 border-t border-black/[0.06] pt-2">
                   <SaveRow onSave={save} state={state} />
                 </div>
@@ -431,15 +558,12 @@ export default function ConfigPage() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
 
-  // Defaults draft
   const [defaults, setDefaults] = useState<ConfigData['defaults'] | null>(null)
   const [defaultsState, setDefaultsState] = useState<SectionState>({ status: 'idle' })
 
-  // Provider drafts
   const [providerDrafts, setProviderDrafts] = useState<Record<string, { base_url: string; api_key: string; use_proxy: boolean }>>({})
   const [providersState, setProvidersState] = useState<SectionState>({ status: 'idle' })
 
-  // Other sections
   const [memory, setMemory] = useState<ConfigData['memory'] | null>(null)
   const [memoryState, setMemoryState] = useState<SectionState>({ status: 'idle' })
   const [webSearch, setWebSearch] = useState<ConfigData['web_search'] | null>(null)
@@ -502,7 +626,7 @@ export default function ConfigPage() {
         const draft = providerDrafts[name]
         const info = config.registry.find(r => r.name === name)
         if (!info) continue
-        const isLocal = !info.needs_api_key
+        const isLocal = info.provider_type === 'local'
         if (isLocal || name === 'custom' || name === 'openrouter') {
           updates[`providers.${name}.base_url`] = draft.base_url || info.default_base_url
         }
@@ -570,12 +694,7 @@ export default function ConfigPage() {
   const updateProvider = (name: string, field: 'base_url' | 'api_key' | 'use_proxy', value: string | boolean) =>
     setProviderDrafts(prev => ({ ...prev, [name]: { ...prev[name], [field]: value } }))
 
-  // Collect available models for the selected default provider
-  const defaultProviderModels = modelsConfig
-    ? (modelsConfig.configured_options ?? [])
-        .filter(o => o.provider === (defaults?.provider ?? ''))
-        .map(o => o.model)
-    : []
+  const defaultsProviderInfo = config?.registry.find(r => r.name === defaults?.provider)
 
   // ---------------------------------------------------------------------------
   // Render
@@ -589,7 +708,8 @@ export default function ConfigPage() {
         <div className="px-5 pt-6 pb-4">
           <h1 className="text-[28px] font-semibold tracking-tight text-black">Priests</h1>
         </div>
-        <div className="px-3 mt-2">
+
+        <div className="px-3 mt-1">
           <button onClick={() => navigate('/ui')}
             className="flex items-center gap-2 px-3 py-2 rounded-lg text-black/50 hover:bg-black/[0.04] hover:text-black/70 cursor-pointer transition-colors text-[13px]">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
@@ -598,9 +718,26 @@ export default function ConfigPage() {
             Back to chat
           </button>
         </div>
+
+        {/* Section navigation */}
+        {!loading && !loadError && (
+          <nav className="px-3 mt-4 flex-1 overflow-y-auto">
+            <p className="px-3 mb-2 text-[10px] font-semibold tracking-widest text-black/30 uppercase">Sections</p>
+            <ul className="space-y-0.5">
+              {SECTIONS.map(s => (
+                <li key={s.id}>
+                  <button onClick={() => scrollTo(s.id)}
+                    className="w-full text-left px-3 py-2 rounded-lg text-[13px] text-black/60 hover:bg-black/[0.04] hover:text-black/80 cursor-pointer transition-colors">
+                    {s.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        )}
       </aside>
 
-      {/* Main */}
+      {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-[72px] bg-white/60 backdrop-blur-xl border-b border-black/[0.06] flex items-center px-8 shrink-0">
           <h2 className="text-[17px] font-semibold text-black">Configuration</h2>
@@ -620,23 +757,14 @@ export default function ConfigPage() {
 
             {!loading && !loadError && config && defaults && memory && webSearch && service && modelsConfig && (
               <>
-                {/* ── Model Configuration ─────────────────────────── */}
-                <ModelConfigSection modelsConfig={modelsConfig} profileList={profileList} />
-
-                {/* ── Profile Configuration ────────────────────────── */}
-                <ProfileConfigSection
-                  profileList={profileList}
-                  onProfileCreated={name => setProfileList(p => [...p, name].sort())}
-                />
-
-                {/* ── Defaults ─────────────────────────────────────── */}
-                <section>
+                {/* ── DEFAULTS ─────────────────────────────────────── */}
+                <section id="defaults">
                   <SectionHeader title="Defaults" />
                   <Card>
                     <div className="px-6 py-5 divide-y divide-black/[0.04]">
                       <Field label="Provider">
                         <select value={defaults.provider ?? ''}
-                          onChange={e => setDefaults(d => d ? { ...d, provider: e.target.value || null } : d)}
+                          onChange={e => setDefaults(d => d ? { ...d, provider: e.target.value || null, model: null } : d)}
                           className={selectCls + " w-[220px]"}>
                           <option value="">— none —</option>
                           {config.registry.map(p => <option key={p.name} value={p.name}>{p.label}</option>)}
@@ -644,17 +772,18 @@ export default function ConfigPage() {
                       </Field>
 
                       <Field label="Model">
-                        {defaultProviderModels.length > 0 ? (
-                          <select value={defaults.model ?? ''}
-                            onChange={e => setDefaults(d => d ? { ...d, model: e.target.value || null } : d)}
-                            className={selectCls + " w-[280px]"}>
-                            <option value="">— none —</option>
-                            {defaultProviderModels.map(m => <option key={m} value={m}>{m}</option>)}
-                          </select>
+                        {defaults.provider && defaultsProviderInfo ? (
+                          <ModelSelect
+                            key={defaults.provider}
+                            providerName={defaults.provider}
+                            knownModels={defaultsProviderInfo.known_models}
+                            value={defaults.model ?? ''}
+                            onValueChange={v => setDefaults(d => d ? { ...d, model: v || null } : d)}
+                          />
                         ) : (
                           <TextInput value={defaults.model ?? ''}
                             onChange={v => setDefaults(d => d ? { ...d, model: v || null } : d)}
-                            placeholder="Add models above, or type a model name" />
+                            placeholder="Select a provider first" />
                         )}
                       </Field>
 
@@ -687,8 +816,17 @@ export default function ConfigPage() {
                   </Card>
                 </section>
 
-                {/* ── Providers ────────────────────────────────────── */}
-                <section>
+                {/* ── PROFILE CONFIGURATION ─────────────────────────── */}
+                <ProfileConfigSection
+                  profileList={profileList}
+                  onProfileCreated={name => setProfileList(p => [...p, name].sort())}
+                />
+
+                {/* ── MODEL CONFIGURATION ───────────────────────────── */}
+                <ModelConfigSection modelsConfig={modelsConfig} registry={config.registry} />
+
+                {/* ── PROVIDERS ─────────────────────────────────────── */}
+                <section id="providers">
                   <SectionHeader title="Providers" />
                   <Card>
                     <div className="px-6 py-5 space-y-3">
@@ -707,8 +845,8 @@ export default function ConfigPage() {
                   </Card>
                 </section>
 
-                {/* ── Memory ───────────────────────────────────────── */}
-                <section>
+                {/* ── MEMORY ───────────────────────────────────────── */}
+                <section id="memory">
                   <SectionHeader title="Memory" />
                   <Card>
                     <div className="px-6 py-5 divide-y divide-black/[0.04]">
@@ -731,8 +869,8 @@ export default function ConfigPage() {
                   </Card>
                 </section>
 
-                {/* ── Web Search ───────────────────────────────────── */}
-                <section>
+                {/* ── WEB SEARCH ───────────────────────────────────── */}
+                <section id="web-search">
                   <SectionHeader title="Web Search" />
                   <Card>
                     <div className="px-6 py-5 divide-y divide-black/[0.04]">
@@ -751,8 +889,8 @@ export default function ConfigPage() {
                   </Card>
                 </section>
 
-                {/* ── Service ──────────────────────────────────────── */}
-                <section>
+                {/* ── SERVICE ──────────────────────────────────────── */}
+                <section id="service">
                   <SectionHeader title="Service" />
                   <Card>
                     <div className="px-6 py-5 divide-y divide-black/[0.04]">
@@ -776,8 +914,8 @@ export default function ConfigPage() {
                   </Card>
                 </section>
 
-                {/* ── Paths ────────────────────────────────────────── */}
-                <section>
+                {/* ── PATHS ────────────────────────────────────────── */}
+                <section id="paths">
                   <SectionHeader title="Paths" />
                   <Card>
                     <div className="px-6 py-5 divide-y divide-black/[0.04]">

@@ -229,6 +229,7 @@ export interface ProviderRegistryItem {
   needs_api_key: boolean
   default_base_url: string
   known_models: string[] | null
+  provider_type: string
 }
 
 export interface ConfigData {
@@ -261,6 +262,16 @@ export interface ConfigData {
     log_file: string | null
   }
   registry: ProviderRegistryItem[]
+}
+
+export async function fetchProviderModels(name: string): Promise<string[]> {
+  try {
+    const r = await fetch(`/v1/providers/${encodeURIComponent(name)}/models`)
+    if (!r.ok) return []
+    return r.json()
+  } catch {
+    return []
+  }
 }
 
 export async function fetchConfig(): Promise<ConfigData> {
