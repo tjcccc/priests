@@ -91,6 +91,7 @@ def _config_to_response(config: AppConfig) -> ConfigResponse:
         memory=config.memory.model_dump(mode="json"),
         web_search=config.web_search.model_dump(mode="json"),
         service=config.service.model_dump(mode="json"),
+        proxy=config.proxy.model_dump(mode="json") if config.proxy else {"url": ""},
         paths=paths_out,
         registry=registry,
     )

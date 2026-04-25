@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 
 import tomli_w
@@ -50,6 +51,10 @@ class ProfileFilesIn(BaseModel):
 
 class CreateProfileIn(BaseModel):
     name: str
+
+
+class RenameProfileIn(BaseModel):
+    new_name: str
 
 
 # ---------------------------------------------------------------------------
@@ -114,3 +119,31 @@ async def create_profile(body: CreateProfileIn, request: Request) -> dict:
     (d / "RULES.md").write_text("", encoding="utf-8")
     (d / "CUSTOM.md").write_text("", encoding="utf-8")
     return {"name": body.name}
+
+
+@router.post("/profiles/{name}/rename", status_code=200)
+async def rename_profile(name: str, body: RenameProfileIn, request: Request) -> dict:
+    _check_name(name)
+    _check_name(body.new_name)
+    if name == "default":
+        raise HTTPException(status_code=400, detail="Cannot rename the default profile")
+    root = _profiles_dir(request)
+    src = root / name
+    dst = root / body.new_name
+    if not src.exists():
+        raise HTTPException(status_code=404, detail=f"Profile {name!r} not found")
+    if dst.exists():
+        raise HTTPException(status_code=409, detail=f"Profile {body.new_name!r} already exists")
+    src.rename(dst)
+    return {"name": body.new_name}
+
+
+@router.delete("/profiles/{name}", status_code=204)
+async def delete_profile(name: str, request: Request) -> None:
+    _check_name(name)
+    if name == "default":
+        raise HTTPException(status_code=400, detail="Cannot delete the default profile")
+    d = _profiles_dir(request) / name
+    if not d.exists():
+        raise HTTPException(status_code=404, detail=f"Profile {name!r} not found")
+    shutil.rmtree(d)

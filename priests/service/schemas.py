@@ -108,6 +108,7 @@ class ConfigResponse(BaseModel):
     memory: dict[str, Any]
     web_search: dict[str, Any]
     service: dict[str, Any]
+    proxy: dict[str, Any]
     paths: dict[str, Any]
     registry: list[ProviderRegistryItem]
 

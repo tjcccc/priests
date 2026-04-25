@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   fetchConfig, patchConfig, fetchModels, fetchProfiles, fetchProfileFiles,
-  putProfileFiles, createProfile, putModelOptions, fetchProviderModels,
+  putProfileFiles, createProfile, renameProfile, deleteProfile, putModelOptions, fetchProviderModels,
   ConfigData, ProviderRegistryItem, ModelsConfig, ProfileFiles,
 } from './api'
 
@@ -18,6 +18,7 @@ const SECTIONS = [
   { id: 'memory',         label: 'Memory' },
   { id: 'web-search',     label: 'Web Search' },
   { id: 'service',        label: 'Service' },
+  { id: 'proxy',          label: 'Proxy' },
   { id: 'paths',          label: 'Paths' },
 ] as const
 
@@ -444,6 +445,9 @@ function ProfileConfigSection({ profileList, onProfileCreated }: {
   const [state, setState] = useState<SectionState>({ status: 'idle' })
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [renamingName, setRenamingName] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const loadProfile = useCallback(async (name: string) => {
     setLoading(true)
@@ -491,6 +495,41 @@ function ProfileConfigSection({ profileList, onProfileCreated }: {
     }
   }
 
+  const startRename = (name: string) => {
+    setRenamingName(name)
+    setRenameValue(name)
+    setActionError(null)
+  }
+
+  const doRename = async () => {
+    if (!renamingName) return
+    const newN = renameValue.trim()
+    if (!newN || newN === renamingName) { setRenamingName(null); return }
+    try {
+      await renameProfile(renamingName, newN)
+      const updated = profiles.map(p => p === renamingName ? newN : p).sort()
+      setProfiles(updated)
+      if (selected === renamingName) setSelected(newN)
+      setRenamingName(null)
+      setActionError(null)
+    } catch (e) {
+      setActionError(String(e))
+    }
+  }
+
+  const doDelete = async (name: string) => {
+    if (!window.confirm(`Delete profile "${name}"? This cannot be undone.`)) return
+    try {
+      await deleteProfile(name)
+      const updated = profiles.filter(p => p !== name)
+      setProfiles(updated)
+      if (selected === name) setSelected(updated[0] ?? '')
+      setActionError(null)
+    } catch (e) {
+      setActionError(String(e))
+    }
+  }
+
   return (
     <section id="profile-config">
       <SectionHeader title="Profile Configuration" />
@@ -500,16 +539,56 @@ function ProfileConfigSection({ profileList, onProfileCreated }: {
           <div className="w-[200px] border-r border-black/[0.06] flex flex-col shrink-0">
             <div className="flex-1 overflow-y-auto p-3 space-y-0.5">
               {profiles.map(name => (
-                <button key={name} onClick={() => setSelected(name)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-[13px] cursor-pointer transition-colors ${
-                    selected === name
-                      ? 'bg-[#007AFF]/10 text-[#007AFF] font-medium'
-                      : 'text-black/70 hover:bg-black/[0.04]'
-                  }`}>
-                  {name}
-                </button>
+                <div key={name} className="group relative">
+                  {renamingName === name ? (
+                    <div className="flex gap-1 px-1">
+                      <input
+                        autoFocus
+                        value={renameValue}
+                        onChange={e => setRenameValue(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') doRename(); if (e.key === 'Escape') setRenamingName(null) }}
+                        className="flex-1 min-w-0 px-2 py-1.5 bg-black/[0.03] rounded-lg border border-[#007AFF]/50 text-[12px] outline-none"
+                      />
+                      <button onClick={doRename}
+                        className="px-2 py-1 bg-[#007AFF] text-white rounded-lg text-[11px] font-medium cursor-pointer shrink-0">
+                        OK
+                      </button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setSelected(name)}
+                      className={`w-full text-left px-3 py-2 rounded-lg text-[13px] cursor-pointer transition-colors ${
+                        selected === name
+                          ? 'bg-[#007AFF]/10 text-[#007AFF] font-medium'
+                          : 'text-black/70 hover:bg-black/[0.04]'
+                      }`}>
+                      {name}
+                    </button>
+                  )}
+                  {renamingName !== name && name !== 'default' && (
+                    <div className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover:flex gap-0.5">
+                      <button onClick={() => startRename(name)} title="Rename"
+                        className="p-1 rounded text-black/30 hover:text-black/60 hover:bg-black/[0.06] cursor-pointer transition-colors">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                          <path d="M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5" strokeLinecap="round" strokeLinejoin="round"/>
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </button>
+                      <button onClick={() => doDelete(name)} title="Delete"
+                        className="p-1 rounded text-black/30 hover:text-[#FF3B30] hover:bg-[#FF3B30]/[0.06] cursor-pointer transition-colors">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                          <path d="M3 6h18M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
+            {actionError && (
+              <div className="mx-3 mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-[11px] text-red-600">
+                {actionError}
+              </div>
+            )}
             <div className="p-3 border-t border-black/[0.06]">
               <div className="flex gap-1.5">
                 <input type="text" value={newName} onChange={e => setNewName(e.target.value)}
@@ -595,6 +674,8 @@ export default function ConfigPage() {
   const [webSearchState, setWebSearchState] = useState<SectionState>({ status: 'idle' })
   const [service, setService] = useState<ConfigData['service'] | null>(null)
   const [serviceState, setServiceState] = useState<SectionState>({ status: 'idle' })
+  const [proxy, setProxy] = useState<{ url: string } | null>(null)
+  const [proxyState, setProxyState] = useState<SectionState>({ status: 'idle' })
 
   useEffect(() => {
     Promise.all([fetchConfig(), fetchModels(), fetchProfiles()])
@@ -612,6 +693,7 @@ export default function ConfigPage() {
         setMemory(cfg.memory)
         setWebSearch(cfg.web_search)
         setService(cfg.service)
+        setProxy(cfg.proxy ?? { url: '' })
         setLoading(false)
       })
       .catch(e => { setLoadError(String(e)); setLoading(false) })
@@ -713,6 +795,17 @@ export default function ConfigPage() {
       setServiceState({ status: 'saved', needsRestart: result.needs_restart })
     } catch (e) {
       setServiceState({ status: 'error', error: String(e) })
+    }
+  }
+
+  const saveProxy = async () => {
+    if (!proxy) return
+    setProxyState({ status: 'saving' })
+    try {
+      await patchConfig({ 'proxy.url': proxy.url })
+      setProxyState({ status: 'saved' })
+    } catch (e) {
+      setProxyState({ status: 'error', error: String(e) })
     }
   }
 
@@ -941,6 +1034,25 @@ export default function ConfigPage() {
                     </div>
                   </Card>
                 </section>
+
+                {/* ── PROXY ────────────────────────────────────────── */}
+                {proxy && (
+                  <section id="proxy">
+                    <SectionHeader title="Proxy" />
+                    <Card>
+                      <div className="px-6 py-5 divide-y divide-black/[0.04]">
+                        <Field label="Proxy URL" note="Used when 'Use proxy' is enabled on a provider">
+                          <TextInput value={proxy.url}
+                            onChange={v => setProxy(p => p ? { ...p, url: v } : p)}
+                            placeholder="http://127.0.0.1:7890" />
+                        </Field>
+                      </div>
+                      <div className="px-6 pb-4">
+                        <SaveRow onSave={saveProxy} state={proxyState} />
+                      </div>
+                    </Card>
+                  </section>
+                )}
 
                 {/* ── PATHS ────────────────────────────────────────── */}
                 <section id="paths">

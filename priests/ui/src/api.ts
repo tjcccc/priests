@@ -191,6 +191,26 @@ export async function createProfile(name: string): Promise<void> {
   }
 }
 
+export async function renameProfile(name: string, newName: string): Promise<void> {
+  const r = await fetch(`/v1/profiles/${encodeURIComponent(name)}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_name: newName }),
+  })
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}))
+    throw new Error(data.detail ?? `Rename failed: ${r.status}`)
+  }
+}
+
+export async function deleteProfile(name: string): Promise<void> {
+  const r = await fetch(`/v1/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}))
+    throw new Error(data.detail ?? `Delete failed: ${r.status}`)
+  }
+}
+
 export async function putModelOptions(options: string[]): Promise<void> {
   const r = await fetch('/v1/config/models/options', {
     method: 'PUT',
@@ -254,6 +274,9 @@ export interface ConfigData {
   service: {
     host: string
     port: number
+  }
+  proxy: {
+    url: string
   }
   paths: {
     profiles_dir: string
