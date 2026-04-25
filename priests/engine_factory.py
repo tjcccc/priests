@@ -67,6 +67,49 @@ class NotInitializedError(RuntimeError):
     pass
 
 
+def build_adapters(config: AppConfig) -> dict:
+    """Build the provider adapters dict from AppConfig.
+
+    Separated from build_engine() so the config PATCH route can hot-reload
+    adapters without touching the session store.
+    """
+    p = config.providers
+    proxy_url = config.proxy.url if (config.proxy and config.proxy.url) else None
+
+    adapters: dict = {
+        "ollama": OllamaProvider(base_url=p.ollama.base_url),
+        "llamacpp": OpenAICompatProvider("llamacpp", p.llamacpp.base_url, "", proxy=None),
+        "lmstudio": OpenAICompatProvider("lmstudio", p.lmstudio.base_url, "", proxy=None),
+    }
+
+    _compat = [
+        ("openai", p.openai),
+        ("gemini", p.gemini),
+        ("bailian", p.bailian),
+        ("alibaba_cloud", p.alibaba_cloud),
+        ("minimax", p.minimax),
+        ("deepseek", p.deepseek),
+        ("kimi", p.kimi),
+        ("groq", p.groq),
+        ("openrouter", p.openrouter),
+        ("mistral", p.mistral),
+        ("together", p.together),
+        ("perplexity", p.perplexity),
+        ("cohere", p.cohere),
+        ("custom", p.custom),
+    ]
+    for name, cfg in _compat:
+        if cfg and cfg.base_url:
+            proxy = proxy_url if (cfg.use_proxy and proxy_url) else None
+            adapters[name] = OpenAICompatProvider(name, cfg.base_url, cfg.api_key, proxy=proxy)
+
+    if p.anthropic and p.anthropic.api_key:
+        proxy = proxy_url if (p.anthropic.use_proxy and proxy_url) else None
+        adapters["anthropic"] = AnthropicProvider(p.anthropic.api_key, proxy=proxy)
+
+    return adapters
+
+
 async def build_engine(config: AppConfig) -> tuple[PriestEngine, SqliteSessionStore]:
     """Construct a PriestEngine and SqliteSessionStore from AppConfig.
 
@@ -89,41 +132,12 @@ async def build_engine(config: AppConfig) -> tuple[PriestEngine, SqliteSessionSt
     _bootstrap_profiles(profiles_root)
 
     profile_loader = FilesystemProfileLoader(profiles_root=profiles_root)
-
     store = SqliteSessionStore(db_path=sessions_db)
-
-    p = config.providers
-    proxy_url = config.proxy.url if (config.proxy and config.proxy.url) else None
-
-    adapters: dict = {
-        "ollama": OllamaProvider(base_url=p.ollama.base_url),
-    }
-
-    _compat = [
-        ("openai", p.openai),
-        ("gemini", p.gemini),
-        ("bailian", p.bailian),
-        ("alibaba_cloud", p.alibaba_cloud),
-        ("minimax", p.minimax),
-        ("deepseek", p.deepseek),
-        ("kimi", p.kimi),
-        ("groq", p.groq),
-        ("openrouter", p.openrouter),
-        ("custom", p.custom),
-    ]
-    for name, cfg in _compat:
-        if cfg and cfg.base_url:
-            proxy = proxy_url if (cfg.use_proxy and proxy_url) else None
-            adapters[name] = OpenAICompatProvider(name, cfg.base_url, cfg.api_key, proxy=proxy)
-
-    if p.anthropic and p.anthropic.api_key:
-        proxy = proxy_url if (p.anthropic.use_proxy and proxy_url) else None
-        adapters["anthropic"] = AnthropicProvider(p.anthropic.api_key, proxy=proxy)
 
     engine = PriestEngine(
         profile_loader=profile_loader,
         session_store=store,
-        adapters=adapters,
+        adapters=build_adapters(config),
     )
 
     return engine, store

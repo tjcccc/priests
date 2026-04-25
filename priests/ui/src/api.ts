@@ -158,6 +158,75 @@ export async function fetchModels(): Promise<ModelsConfig> {
 }
 
 // ---------------------------------------------------------------------------
+// Config API types
+// ---------------------------------------------------------------------------
+
+export interface ProviderConfigData {
+  base_url: string
+  api_key: string   // "" if unset; "••••••" if set (masked)
+  use_proxy: boolean
+}
+
+export interface ProviderRegistryItem {
+  name: string
+  label: string
+  needs_api_key: boolean
+  default_base_url: string
+  known_models: string[] | null
+}
+
+export interface ConfigData {
+  defaults: {
+    provider: string | null
+    model: string | null
+    profile: string
+    timeout_seconds: number
+    max_output_tokens: number | null
+    think: boolean
+  }
+  providers: Record<string, ProviderConfigData>
+  memory: {
+    size_limit: number
+    context_limit: number
+    flat_line_cap: number
+  }
+  web_search: {
+    enabled: boolean
+    max_results: number
+  }
+  service: {
+    host: string
+    port: number
+  }
+  paths: {
+    profiles_dir: string
+    sessions_db: string
+    uploads_dir: string
+    log_file: string | null
+  }
+  registry: ProviderRegistryItem[]
+}
+
+export async function fetchConfig(): Promise<ConfigData> {
+  const r = await fetch('/v1/config')
+  if (!r.ok) throw new Error(`Failed to fetch config: ${r.status}`)
+  return r.json()
+}
+
+export async function patchConfig(updates: Record<string, string>): Promise<{ needs_restart: boolean }> {
+  const r = await fetch('/v1/config', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ updates }),
+  })
+  if (!r.ok) {
+    const text = await r.text()
+    throw new Error(`Config update failed: ${text}`)
+  }
+  return r.json()
+}
+
+// ---------------------------------------------------------------------------
 // Streaming chat
 // ---------------------------------------------------------------------------
 

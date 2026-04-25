@@ -1,5 +1,31 @@
 # DEVLOG
 
+## 2026-04-25 — v0.16.0 — config page, new providers, memory extraction
+
+### Initiative 1: Web Config Page (`/ui/config`)
+- `GET /v1/config` — returns full AppConfig with api_key values masked (`"••••••"` if set, `""` if unset)
+- `PATCH /v1/config` — accepts `{ updates: { "dotted.key": "value" } }`, applies to config file, hot-reloads adapters on the live engine (store unchanged), returns `{ needs_restart: bool }` for service.host/port changes
+- `ConfigPage.tsx` — full React config UI with sections: Defaults, Providers, Memory, Web Search, Service, Paths; per-section Save buttons; show/hide toggle for API key fields; restart banner for service changes
+- `_set_nested()` helper in config route handles None provider configs (creates sub-dict on first key set)
+- `build_adapters(config)` extracted from `build_engine()` so config route can hot-reload without touching the SQLite store
+
+### Initiative 2: New Providers (6 additions)
+- **llama.cpp** (`llamacpp`): `http://localhost:8080`, no key, dynamic model list
+- **LM Studio** (`lmstudio`): `http://localhost:1234/v1`, no key, dynamic model list
+- **Mistral AI** (`mistral`): `https://api.mistral.ai/v1`, needs key
+- **Together AI** (`together`): `https://api.together.xyz/v1`, needs key, free-text model slug
+- **Perplexity** (`perplexity`): `https://api.perplexity.ai`, needs key
+- **Cohere** (`cohere`): `https://api.cohere.com/compatibility/v1`, needs key
+- llamacpp/lmstudio use `OllamaConfig` shape (always-on, no api key); all six appear in init wizard automatically
+
+### Initiative 3: Memory System Extraction to priest-core
+- Created `priest/priest/memory/__init__.py` — moved `StreamingStripper`, all memory file helpers, and `clean_last_turn`/`pop_last_exchange` into priest-core v2.1.0
+- `priests/memory/extractor.py` is now a thin re-export shim: `from priest.memory import *`
+- Backward compat preserved: all existing import paths (`from priests.memory.extractor import ...`) continue to work; all 56 tests pass unchanged
+- Bumped priest-core to `2.1.0`, priests dep floor to `>=2.1.0`
+
+---
+
 ## 2026-04-20 — v0.15.0 — session management, URL routing, turn metadata
 
 - **Session context menu**: 3-dot button on each sidebar session (visible on hover); fixed-position dropdown (escapes sidebar overflow) with Pin, Rename, Delete actions

@@ -63,6 +63,8 @@ class ProvidersConfig(BaseModel):
     # All API providers default to None and are only written to priests.toml
     # once the user has configured them.
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+    llamacpp: OllamaConfig = Field(default_factory=lambda: OllamaConfig(base_url="http://localhost:8080"))
+    lmstudio: OllamaConfig = Field(default_factory=lambda: OllamaConfig(base_url="http://localhost:1234/v1"))
     openai: OpenAICompatConfig | None = None
     anthropic: AnthropicConfig | None = None
     gemini: OpenAICompatConfig | None = None
@@ -73,6 +75,10 @@ class ProvidersConfig(BaseModel):
     kimi: OpenAICompatConfig | None = None
     groq: OpenAICompatConfig | None = None
     openrouter: OpenAICompatConfig | None = None
+    mistral: OpenAICompatConfig | None = None
+    together: OpenAICompatConfig | None = None
+    perplexity: OpenAICompatConfig | None = None
+    cohere: OpenAICompatConfig | None = None
     custom: OpenAICompatConfig | None = None
 
 

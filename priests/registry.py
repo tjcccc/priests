@@ -139,6 +139,48 @@ REGISTRY: dict[str, ProviderInfo] = {
         default_base_url="https://openrouter.ai/api/v1",
         known_models=[],  # too many to curate; user types the model slug
     ),
+    "llamacpp": ProviderInfo(
+        name="llamacpp",
+        label="llama.cpp  (local)",
+        needs_api_key=False,
+        default_base_url="http://localhost:8080",
+        known_models=None,  # fetched dynamically
+    ),
+    "lmstudio": ProviderInfo(
+        name="lmstudio",
+        label="LM Studio  (local)",
+        needs_api_key=False,
+        default_base_url="http://localhost:1234/v1",
+        known_models=None,  # fetched dynamically
+    ),
+    "mistral": ProviderInfo(
+        name="mistral",
+        label="Mistral AI",
+        needs_api_key=True,
+        default_base_url="https://api.mistral.ai/v1",
+        known_models=["mistral-large-latest", "mistral-small-latest", "codestral-latest"],
+    ),
+    "together": ProviderInfo(
+        name="together",
+        label="Together AI",
+        needs_api_key=True,
+        default_base_url="https://api.together.xyz/v1",
+        known_models=[],  # too many to enumerate; user enters model slug
+    ),
+    "perplexity": ProviderInfo(
+        name="perplexity",
+        label="Perplexity",
+        needs_api_key=True,
+        default_base_url="https://api.perplexity.ai",
+        known_models=["sonar", "sonar-pro", "sonar-reasoning"],
+    ),
+    "cohere": ProviderInfo(
+        name="cohere",
+        label="Cohere",
+        needs_api_key=True,
+        default_base_url="https://api.cohere.com/compatibility/v1",
+        known_models=["command-r-plus-08-2024", "command-r-08-2024"],
+    ),
     "custom": ProviderInfo(
         name="custom",
         label="Custom OpenAI-compatible endpoint",

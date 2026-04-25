@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any  # used by ConfigResponse fields
 
 from priest.schema.request import OutputSpec
 from pydantic import BaseModel, model_validator
@@ -80,3 +81,39 @@ class SessionDetail(BaseModel):
                 for t in session.turns
             ],
         )
+
+
+# ---------------------------------------------------------------------------
+# Config API schemas
+# ---------------------------------------------------------------------------
+
+class ProviderConfigOut(BaseModel):
+    base_url: str = ""
+    api_key: str = ""  # "" if unset; "••••••" if set (real key never sent)
+    use_proxy: bool = False
+
+
+class ProviderRegistryItem(BaseModel):
+    name: str
+    label: str
+    needs_api_key: bool
+    default_base_url: str
+    known_models: list[str] | None
+
+
+class ConfigResponse(BaseModel):
+    defaults: dict[str, Any]
+    providers: dict[str, ProviderConfigOut]
+    memory: dict[str, Any]
+    web_search: dict[str, Any]
+    service: dict[str, Any]
+    paths: dict[str, Any]
+    registry: list[ProviderRegistryItem]
+
+
+class ConfigPatchRequest(BaseModel):
+    updates: dict[str, str]
+
+
+class ConfigPatchResponse(BaseModel):
+    needs_restart: bool
