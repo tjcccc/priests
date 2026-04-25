@@ -1,5 +1,22 @@
 # DEVLOG
 
+## 2026-04-25 — v0.17.0 — config UI overhaul, proxy URL, profile rename/delete
+
+### Config UI — full rewrite
+- **Section sidebar nav**: fixed left nav with smooth-scroll links to all 8 sections (Defaults, Profile Configuration, Model Configuration, Providers, Memory, Web Search, Service, Paths, Proxy)
+- **Defaults section**: Provider select + Model select both as dropdowns; Model select capped at `max-w-[360px]`; section moved to top
+- **ModelSelect component**: three modes — `null` (dynamic fetch from `/v1/providers/{name}/models`), `[]` (free text), `[...]` (curated dropdown + "Custom model name" escape hatch); remounts on provider change
+- **Model Configuration section**: providers grouped by type (Local → API → OAuth) via `<optgroup>`; wider provider select
+- **Dynamic model fetching**: `GET /v1/providers/{name}/models` — proxies Ollama `/api/tags`, llamacpp/lmstudio `/v1/models` (2 s timeout, returns `[]` on error); returns `known_models` list for API/OAuth providers
+- **GitHub Copilot + ChatGPT OAuth providers**: both added to registry, engine_factory, config model, config route, and UI; `ProviderCard` shows auth guidance for OAuth providers (device-flow hint for Copilot, platform link for ChatGPT)
+- **provider_type field**: `ProviderRegistryItem` now exposes `provider_type: str` to frontend for grouping; registry entries have `"local"` / `"api"` / `"oauth"` values
+- **Profile Configuration**: panel min-height removed internal scrollbar; removed duplicate top border above Save button; Host field width capped at 240 px
+- **Proxy section**: new Proxy section with a `proxy.url` text field wired to `PATCH /v1/config { "proxy.url": "..." }`; fixes silent no-op when `use_proxy` was enabled but `[proxy]` block was absent from priests.toml; `ConfigResponse` now includes `proxy: { url }` from backend
+- **Profile rename/delete**: hover icons (pencil/trash) on each non-default profile in the left sidebar; inline rename input with Enter/Escape handling; `window.confirm()` delete guard; error display inline in the sidebar; active-profile tracking updated on rename
+- **Backend routes**: `POST /profiles/{name}/rename` (body: `{new_name}`), `DELETE /profiles/{name}`; both protected against the `default` profile; regex-validated names; `shutil.rmtree` for delete
+
+---
+
 ## 2026-04-25 — v0.16.0 — config page, new providers, memory extraction
 
 ### Initiative 1: Web Config Page (`/ui/config`)

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "priests"
-version = "0.15.0"
+version = "0.17.0"
 description = "CLI tool and HTTP service for priest AI orchestration"
 requires-python = ">=3.11"
 dependencies = [

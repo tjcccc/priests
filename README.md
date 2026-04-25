@@ -94,20 +94,30 @@ Ctrl+J inserts a newline. Enter submits.
 
 ## Supported providers
 
-| Key | Provider | Region |
-|-----|----------|--------|
-| `ollama` | Ollama (local models) | Local |
-| `openai` | OpenAI | International |
-| `anthropic` | Anthropic Claude | International |
-| `gemini` | Google Gemini | International |
-| `groq` | Groq | International |
-| `openrouter` | OpenRouter | International |
-| `minimax` | MiniMax | International |
-| `bailian` | Alibaba Bailian | China mainland |
-| `alibaba_cloud` | Alibaba Cloud | International |
-| `deepseek` | DeepSeek | China mainland |
-| `kimi` | Kimi (Moonshot) | China mainland |
-| `custom` | Custom OpenAI-compatible endpoint | Any |
+| Key | Provider | Type | Region |
+|-----|----------|------|--------|
+| `ollama` | Ollama | Local | Local |
+| `llamacpp` | llama.cpp | Local | Local |
+| `lmstudio` | LM Studio | Local | Local |
+| `openai` | OpenAI | API | International |
+| `anthropic` | Anthropic Claude | API | International |
+| `gemini` | Google Gemini | API | International |
+| `groq` | Groq | API | International |
+| `openrouter` | OpenRouter (gateway) | API | International |
+| `deepseek` | DeepSeek | API | China mainland |
+| `mistral` | Mistral AI | API | International |
+| `together` | Together AI | API | International |
+| `perplexity` | Perplexity | API | International |
+| `cohere` | Cohere | API | International |
+| `minimax` | MiniMax | API | International |
+| `bailian` | Alibaba Bailian | API | China mainland |
+| `alibaba_cloud` | Alibaba Cloud | API | International |
+| `kimi` | Kimi (Moonshot) | API | China mainland |
+| `github_copilot` | GitHub Copilot | OAuth | International |
+| `chatgpt` | ChatGPT (OpenAI OAuth) | OAuth | International |
+| `custom` | Custom OpenAI-compatible endpoint | API | Any |
+
+Local providers (Ollama, llama.cpp, LM Studio) require no API key and fetch available models automatically from the running server.
 
 ## Config file
 
@@ -195,6 +205,8 @@ Use it:
 priests run --profile english_teacher
 ```
 
+Rename or delete non-default profiles from the Config page → Profile Configuration section, or manage them directly in `~/.priests/profiles/`.
+
 For tool profiles that don't need memory (formatters, dictionaries, etc.), set `memories = false` in `profile.toml`:
 
 ```toml
@@ -226,6 +238,19 @@ priests run --memories false
 
 To disable permanently for a profile, set `memories = false` in `profile.toml`.
 
+## Web UI
+
+Start the service with `priests service start` and open `http://localhost:8777/ui`.
+
+- **Chat**: streaming responses, markdown rendering, image attach (drag-and-drop or click), per-turn model and timing info
+- **Sessions**: sidebar with per-profile session lists; pin, rename, and delete sessions
+- **Config page** (`/ui/config`): full settings UI with section nav
+  - Defaults: provider + model select, profile, timeout, thinking mode
+  - Profile Configuration: editor for PROFILE.md / RULES.md / CUSTOM.md per profile; rename and delete profiles
+  - Model Configuration: saved model list grouped by provider type (local / API / OAuth)
+  - Providers: per-provider API key, base URL, and proxy toggle
+  - Memory, Web Search, Service, Proxy, Paths sections — all editable with hot-reload (no restart required except host/port)
+
 ## HTTP API
 
 Start the service with `priests service start`, then:
@@ -238,4 +263,13 @@ POST /v1/chat                       session-backed chat
 POST /v1/chat?memories=false        session-backed chat, memory disabled
 GET  /v1/sessions                   list sessions
 GET  /v1/sessions/{id}              get session with full turn history
+GET  /v1/config                     get full config (API keys masked)
+PATCH /v1/config                    partial config update (dotted keys)
+GET  /v1/providers/{name}/models    list available models for a provider
+GET  /v1/profiles                   list profiles
+GET  /v1/profiles/{name}            get profile files
+PUT  /v1/profiles/{name}            update profile files
+POST /v1/profiles                   create profile
+POST /v1/profiles/{name}/rename     rename profile
+DELETE /v1/profiles/{name}          delete profile
 ```
