@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel  # noqa: F401 (used by inline schema classes below)
 
 from priests.config.loader import load_config, save_config
 from priests.config.model import AppConfig
@@ -17,6 +18,14 @@ from priests.service.schemas import (
 router = APIRouter()
 
 _RESTART_KEYS = frozenset({"service.host", "service.port"})
+
+
+class ModelOptionsIn(BaseModel):
+    options: list[str]  # each entry: "provider/model"
+
+
+class ModelOptionsOut(BaseModel):
+    options: list[str]
 
 
 def _mask(val: str) -> str:
@@ -148,3 +157,16 @@ async def patch_config(body: ConfigPatchRequest, request: Request) -> ConfigPatc
     request.app.state.config = updated
 
     return ConfigPatchResponse(needs_restart=needs_restart)
+
+
+@router.put("/config/models/options", response_model=ModelOptionsOut)
+async def put_model_options(body: ModelOptionsIn, request: Request) -> ModelOptionsOut:
+    """Replace the full configured model options list."""
+    for entry in body.options:
+        if "/" not in entry:
+            raise HTTPException(status_code=422, detail=f"Invalid option format {entry!r}: must be 'provider/model'")
+    current = load_config()
+    current.models.options = body.options
+    save_config(current)
+    request.app.state.config = current
+    return ModelOptionsOut(options=body.options)

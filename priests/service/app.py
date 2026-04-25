@@ -12,6 +12,7 @@ from priests.config.model import AppConfig
 from priests.engine_factory import build_engine
 from priests.service.routes.config import router as config_router
 from priests.service.routes.health import router as health_router
+from priests.service.routes.profiles import router as profiles_router
 from priests.service.routes.run import router as run_router
 from priests.service.routes.sessions import router as session_router
 from priests.service.routes.ui import router as ui_router
@@ -50,6 +51,7 @@ def create_app(config: AppConfig) -> FastAPI:
     app.include_router(ui_router, prefix="/v1", tags=["ui"])
     app.include_router(uploads_router, prefix="/v1", tags=["uploads"])
     app.include_router(config_router, prefix="/v1", tags=["config"])
+    app.include_router(profiles_router, prefix="/v1", tags=["profiles"])
 
     if _UI_DIST.exists():
         # Serve static assets (JS/CSS/images) from dist/

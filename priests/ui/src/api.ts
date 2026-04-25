@@ -147,6 +147,62 @@ export async function fetchSessionUploads(sessionId: string): Promise<SessionUpl
   }
 }
 
+// ---------------------------------------------------------------------------
+// Profiles API
+// ---------------------------------------------------------------------------
+
+export interface ProfileFiles {
+  profile_md: string
+  rules_md: string
+  custom_md: string
+  memories: boolean
+}
+
+export async function fetchProfiles(): Promise<string[]> {
+  const r = await fetch('/v1/profiles')
+  if (!r.ok) return []
+  return r.json()
+}
+
+export async function fetchProfileFiles(name: string): Promise<ProfileFiles> {
+  const r = await fetch(`/v1/profiles/${encodeURIComponent(name)}`)
+  if (!r.ok) throw new Error(`Profile not found: ${r.status}`)
+  return r.json()
+}
+
+export async function putProfileFiles(name: string, body: Partial<ProfileFiles>): Promise<void> {
+  const r = await fetch(`/v1/profiles/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`Profile save failed: ${r.status}`)
+}
+
+export async function createProfile(name: string): Promise<void> {
+  const r = await fetch('/v1/profiles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!r.ok) {
+    const text = await r.text()
+    throw new Error(`Create profile failed: ${text}`)
+  }
+}
+
+export async function putModelOptions(options: string[]): Promise<void> {
+  const r = await fetch('/v1/config/models/options', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ options }),
+  })
+  if (!r.ok) {
+    const text = await r.text()
+    throw new Error(`Model options update failed: ${text}`)
+  }
+}
+
 export async function fetchModels(): Promise<ModelsConfig> {
   try {
     const r = await fetch('/v1/ui/models')
