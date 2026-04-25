@@ -213,6 +213,17 @@ REGISTRY: dict[str, ProviderInfo] = {
         ],
         provider_type="oauth",
     ),
+    "chatgpt": ProviderInfo(
+        name="chatgpt",
+        label="ChatGPT (OpenAI OAuth)",
+        needs_api_key=True,  # OpenAI OAuth app token or API key from platform.openai.com
+        default_base_url="https://api.openai.com/v1",
+        known_models=[
+            "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini",
+            "o4-mini", "o3",
+        ],
+        provider_type="oauth",
+    ),
     # ── Custom ─────────────────────────────────────────────────────────────
     "custom": ProviderInfo(
         name="custom",

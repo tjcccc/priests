@@ -80,6 +80,7 @@ class ProvidersConfig(BaseModel):
     perplexity: OpenAICompatConfig | None = None
     cohere: OpenAICompatConfig | None = None
     github_copilot: OpenAICompatConfig | None = None
+    chatgpt: OpenAICompatConfig | None = None
     custom: OpenAICompatConfig | None = None
 
 

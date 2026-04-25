@@ -136,11 +136,12 @@ function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) =>
 // Supports a "Custom model name…" fallback text input
 // ---------------------------------------------------------------------------
 
-function ModelSelect({ providerName, knownModels, value, onValueChange }: {
+function ModelSelect({ providerName, knownModels, value, onValueChange, className }: {
   providerName: string
   knownModels: string[] | null   // null = fetch dynamically; [] = free text only
   value: string
   onValueChange: (v: string) => void
+  className?: string
 }) {
   const [dynamicModels, setDynamicModels] = useState<string[]>([])
   const [fetching, setFetching] = useState(false)
@@ -178,7 +179,7 @@ function ModelSelect({ providerName, knownModels, value, onValueChange }: {
   }
 
   return (
-    <div className="flex gap-2 flex-1 flex-wrap items-center">
+    <div className={`flex gap-2 flex-1 flex-wrap items-center ${className ?? ''}`}>
       <select
         value={showCustom ? CUSTOM_MODEL : value}
         onChange={e => {
@@ -223,12 +224,25 @@ interface ProviderCardProps {
   onChange: (field: 'base_url' | 'api_key' | 'use_proxy', value: string | boolean) => void
 }
 
+const OAUTH_NOTES: Record<string, { hint: string; link?: string }> = {
+  github_copilot: {
+    hint: 'Requires a GitHub Personal Access Token with Copilot scope, or complete the device-flow at:',
+    link: 'https://github.com/login/device',
+  },
+  chatgpt: {
+    hint: 'Use an OpenAI API key from platform.openai.com, or an OAuth app token if your org uses OpenAI OAuth. Paste the token below as the API key.',
+    link: 'https://platform.openai.com/api-keys',
+  },
+}
+
 function ProviderCard({ name, info, baseUrl, apiKey, useProxy, onChange }: ProviderCardProps) {
   const typeBadge = info.provider_type === 'local'
     ? 'bg-[#34C759]/10 text-[#34C759]'
     : info.provider_type === 'oauth'
     ? 'bg-[#AF52DE]/10 text-[#AF52DE]'
     : 'bg-[#007AFF]/10 text-[#007AFF]'
+
+  const oauthNote = info.provider_type === 'oauth' ? OAUTH_NOTES[name] : null
 
   return (
     <div className="border border-black/[0.07] rounded-xl p-4 space-y-3">
@@ -238,6 +252,17 @@ function ProviderCard({ name, info, baseUrl, apiKey, useProxy, onChange }: Provi
           {info.provider_type}
         </span>
       </div>
+      {oauthNote && (
+        <div className="bg-[#AF52DE]/[0.06] border border-[#AF52DE]/20 rounded-lg px-3 py-2 space-y-0.5">
+          <p className="text-[12px] text-black/60">{oauthNote.hint}</p>
+          {oauthNote.link && (
+            <a href={oauthNote.link} target="_blank" rel="noreferrer"
+              className="text-[12px] text-[#007AFF] hover:underline font-mono">
+              {oauthNote.link}
+            </a>
+          )}
+        </div>
+      )}
       {(info.provider_type === 'local' || name === 'custom' || name === 'openrouter') && (
         <div>
           <p className="text-[11px] text-black/40 mb-1">Base URL</p>
@@ -246,8 +271,8 @@ function ProviderCard({ name, info, baseUrl, apiKey, useProxy, onChange }: Provi
       )}
       {info.needs_api_key && (
         <div>
-          <p className="text-[11px] text-black/40 mb-1">API Key</p>
-          <TextInput value={apiKey} onChange={v => onChange('api_key', v)} placeholder="Enter API key…" masked />
+          <p className="text-[11px] text-black/40 mb-1">{info.provider_type === 'oauth' ? 'Token / API Key' : 'API Key'}</p>
+          <TextInput value={apiKey} onChange={v => onChange('api_key', v)} placeholder="Paste token or key…" masked />
         </div>
       )}
       {info.needs_api_key && (
@@ -534,7 +559,7 @@ function ProfileConfigSection({ profileList, onProfileCreated }: {
                     </label>
                   </div>
                 </div>
-                <div className="px-4 pb-4 border-t border-black/[0.06] pt-2">
+                <div className="px-4 pb-4">
                   <SaveRow onSave={save} state={state} />
                 </div>
               </>
@@ -779,6 +804,7 @@ export default function ConfigPage() {
                             knownModels={defaultsProviderInfo.known_models}
                             value={defaults.model ?? ''}
                             onValueChange={v => setDefaults(d => d ? { ...d, model: v || null } : d)}
+                            className="max-w-[360px]"
                           />
                         ) : (
                           <TextInput value={defaults.model ?? ''}
@@ -895,8 +921,10 @@ export default function ConfigPage() {
                   <Card>
                     <div className="px-6 py-5 divide-y divide-black/[0.04]">
                       <Field label="Host">
-                        <TextInput value={service.host}
-                          onChange={v => setService(s => s ? { ...s, host: v } : s)} placeholder="127.0.0.1" />
+                        <div className="w-[240px]">
+                          <TextInput value={service.host}
+                            onChange={v => setService(s => s ? { ...s, host: v } : s)} placeholder="127.0.0.1" />
+                        </div>
                       </Field>
                       <Field label="Port" note="Requires restart">
                         <NumberInput value={service.port}

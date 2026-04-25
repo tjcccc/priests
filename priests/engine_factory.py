@@ -97,6 +97,7 @@ def build_adapters(config: AppConfig) -> dict:
         ("perplexity", p.perplexity),
         ("cohere", p.cohere),
         ("github_copilot", p.github_copilot),
+        ("chatgpt", p.chatgpt),
         ("custom", p.custom),
     ]
     for name, cfg in _compat:

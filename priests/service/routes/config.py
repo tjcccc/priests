@@ -55,7 +55,7 @@ def _config_to_response(config: AppConfig) -> ConfigResponse:
     compat_providers = [
         "openai", "gemini", "bailian", "alibaba_cloud", "minimax", "deepseek",
         "kimi", "groq", "openrouter", "mistral", "together", "perplexity", "cohere",
-        "github_copilot", "custom",
+        "github_copilot", "chatgpt", "custom",
     ]
     for name in compat_providers:
         cfg = getattr(p, name, None)
