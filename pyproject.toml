@@ -33,6 +33,9 @@ dev = [
 [project.scripts]
 priests = "priests.cli.main:app"
 
+[tool.hatch.build.targets.sdist.force-include]
+"priests/ui/dist" = "priests/ui/dist"
+
 [tool.hatch.build.targets.wheel]
 packages = ["priests"]
 exclude = ["priests/ui/node_modules"]
