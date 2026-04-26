@@ -43,5 +43,7 @@ exclude = ["priests/ui/node_modules"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 
+# Local dev only — remove this section when developing without a sibling priest checkout.
+# PyPI resolves priest-core>=2.2.0 automatically when this block is absent.
 [tool.uv.sources]
 priest-core = { path = "../priest", editable = true }

@@ -19,7 +19,7 @@ CLI tool and HTTP service for [priest](https://github.com/tjcccc/priest) AI orch
 ### From source
 
 ```bash
-git clone <this repo>
+git clone https://github.com/tjcccc/priests
 cd priests
 uv sync
 ```
