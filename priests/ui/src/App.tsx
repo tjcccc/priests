@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { marked } from 'marked'
 import {
-  fetchSessions, fetchSession, fetchUIMeta, fetchModels,
+  fetchSessions, fetchSession, fetchUIMeta, fetchModels, fetchProfiles,
   putSessionTitle, putProfileEmoji, streamChat, uploadImage, fetchSessionUploads,
   deleteSession, pinSession,
   SessionSummary, UIMeta, ModelsConfig, StreamMeta,
@@ -203,9 +203,13 @@ export default function App() {
 
   const loadSessions = useCallback(async (): Promise<SessionSummary[]> => {
     try {
-      const sessions = await fetchSessions()
+      const [sessions, allProfileNames] = await Promise.all([fetchSessions(), fetchProfiles()])
       setProfiles(prev => {
         const fresh = groupByProfile(sessions)
+        const freshNames = new Set(fresh.map(p => p.name))
+        for (const name of allProfileNames) {
+          if (!freshNames.has(name)) fresh.push({ name, sessions: [], expanded: false })
+        }
         return fresh.map(p => {
           const old = prev.find(op => op.name === p.name)
           return old ? { ...p, expanded: old.expanded } : p

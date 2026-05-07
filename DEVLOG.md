@@ -1,5 +1,12 @@
 # DEVLOG
 
+## 2026-05-07 — v0.17.2 — fix sidebar showing only profiles with sessions
+
+- Sidebar in the web UI now shows all profiles, including profiles with no chat sessions
+- `loadSessions` in `App.tsx` fetches `GET /v1/profiles` in parallel with sessions and merges the full list so empty profiles always appear
+
+---
+
 ## 2026-04-25 — v0.17.0 — config UI overhaul, proxy URL, profile rename/delete
 
 ### Config UI — full rewrite
