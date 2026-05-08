@@ -156,6 +156,8 @@ export interface ProfileFiles {
   rules_md: string
   custom_md: string
   memories: boolean
+  provider: string | null
+  model: string | null
 }
 
 export async function fetchProfiles(): Promise<string[]> {

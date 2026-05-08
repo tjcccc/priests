@@ -435,8 +435,10 @@ function ModelConfigSection({ modelsConfig, registry }: {
 // Profile Configuration section
 // ---------------------------------------------------------------------------
 
-function ProfileConfigSection({ profileList, onProfileCreated }: {
-  profileList: string[]; onProfileCreated: (name: string) => void
+function ProfileConfigSection({ profileList, modelsConfig, onProfileCreated }: {
+  profileList: string[]
+  modelsConfig: ModelsConfig
+  onProfileCreated: (name: string) => void
 }) {
   const [profiles, setProfiles] = useState<string[]>(profileList)
   const [selected, setSelected] = useState(profileList[0] ?? '')
@@ -456,7 +458,7 @@ function ProfileConfigSection({ profileList, onProfileCreated }: {
       const f = await fetchProfileFiles(name)
       setFiles(f)
     } catch {
-      setFiles({ profile_md: '', rules_md: '', custom_md: '', memories: true })
+      setFiles({ profile_md: '', rules_md: '', custom_md: '', memories: true, provider: null, model: null })
     } finally {
       setLoading(false)
     }
@@ -529,6 +531,17 @@ function ProfileConfigSection({ profileList, onProfileCreated }: {
       setActionError(String(e))
     }
   }
+
+  const selectedModelLabel = files?.provider && files?.model ? `${files.provider}/${files.model}` : ''
+  const defaultModelLabel = modelsConfig.default_provider && modelsConfig.default_model
+    ? `Use global default (${modelsConfig.default_provider}/${modelsConfig.default_model})`
+    : 'Use global default'
+  const selectedModelIndex = modelsConfig.configured_options.findIndex(
+    opt => opt.provider === files?.provider && opt.model === files?.model
+  )
+  const selectedModelValue = selectedModelLabel
+    ? (selectedModelIndex >= 0 ? `idx:${selectedModelIndex}` : 'current')
+    : ''
 
   return (
     <section id="profile-config">
@@ -628,6 +641,40 @@ function ProfileConfigSection({ profileList, onProfileCreated }: {
                       </div>
                     )
                   )}
+                  <div className="pt-2 border-t border-black/[0.06]">
+                    <label className="flex items-center justify-between gap-4 py-2">
+                      <div>
+                        <div className="text-[13px] text-black font-medium">Profile Model</div>
+                        <div className="text-[11px] text-black/40 mt-0.5">Overrides the global default for this profile</div>
+                      </div>
+                      <select
+                        value={selectedModelValue}
+                        onChange={e => {
+                          const value = e.target.value
+                          if (!value) {
+                            setFiles(f => f ? { ...f, provider: null, model: null } : f)
+                            return
+                          }
+                          if (value === 'current') return
+                          const idx = Number(value.slice(4))
+                          const option = modelsConfig.configured_options[idx]
+                          if (!option) return
+                          const { provider, model } = option
+                          setFiles(f => f ? { ...f, provider, model } : f)
+                        }}
+                        className={selectCls + " w-[320px] max-w-full"}
+                      >
+                        <option value="">{defaultModelLabel}</option>
+                        {selectedModelLabel && selectedModelIndex < 0 && (
+                          <option value="current">{selectedModelLabel} (not in added models)</option>
+                        )}
+                        {modelsConfig.configured_options.map((opt, idx) => {
+                          const label = `${opt.provider}/${opt.model}`
+                          return <option key={label} value={`idx:${idx}`}>{label}</option>
+                        })}
+                      </select>
+                    </label>
+                  </div>
                   <div className="pt-2 border-t border-black/[0.06]">
                     <label className="flex items-center justify-between cursor-pointer">
                       <div>
@@ -938,6 +985,7 @@ export default function ConfigPage() {
                 {/* ── PROFILE CONFIGURATION ─────────────────────────── */}
                 <ProfileConfigSection
                   profileList={profileList}
+                  modelsConfig={modelsConfig}
                   onProfileCreated={name => setProfileList(p => [...p, name].sort())}
                 />
 

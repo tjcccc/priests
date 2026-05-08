@@ -4,8 +4,14 @@ from pathlib import Path
 from typing import Annotated
 
 import questionary
+import tomli_w
 import typer
 from rich.console import Console
+
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib  # type: ignore[no-redef]
 
 from priests.cli.init_cmd import (
     _apply_provider_to_config,
@@ -15,6 +21,7 @@ from priests.cli.init_cmd import (
     _select_ollama_model,
 )
 from priests.config.loader import is_initialized, load_config, save_config
+from priests.config.model import AppConfig
 from priests.registry import list_providers
 
 model_app = typer.Typer(help="Manage model defaults and provider setup.")
@@ -36,6 +43,7 @@ def model_root(
     console.print(f"Current model: {provider}/{model}")
 
 _ADD_NEW = "__add_new__"
+_USE_GLOBAL_DEFAULT = "__use_global_default__"
 
 
 @model_app.command("list")
@@ -59,26 +67,54 @@ def model_list(
 
 @model_app.command("default")
 def model_default(
+    profile: Annotated[str | None, typer.Option("--profile", help="Set model override for this profile instead of the global default.")] = None,
     config_file: Annotated[Path | None, typer.Option("--config", help="Path to priests.toml.")] = None,
 ) -> None:
-    """Set the default model from your added models list."""
+    """Set the global default model, or a profile model override with --profile."""
     if not is_initialized(config_file):
         err_console.print("[yellow]Not initialized.[/yellow] Run [bold]priests init[/bold] first.")
         raise typer.Exit(1)
 
     config = load_config(config_file)
+    profile_dir: Path | None = None
+    if profile:
+        try:
+            profile_dir = _require_profile_dir(config, profile)
+        except ValueError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
 
-    if config.models.options:
-        choices = [questionary.Choice(title=m) for m in config.models.options]
+    if profile:
+        default_label = _global_default_label(config)
+        choices = [questionary.Choice(title=f"Use default ({default_label})", value=_USE_GLOBAL_DEFAULT)]
+        choices.extend(questionary.Choice(title=m) for m in config.models.options)
+        choices.append(questionary.Choice(title="Add new model…", value=_ADD_NEW))
+        selected = _arrow_select(f"Select model for profile '{profile}':", choices)
+    elif config.models.options:
+        choices = []
+        choices.extend(questionary.Choice(title=m) for m in config.models.options)
         choices.append(questionary.Choice(title="Add new model…", value=_ADD_NEW))
         selected = _arrow_select("Select default model:", choices)
     else:
         selected = _ADD_NEW
 
+    if selected == _USE_GLOBAL_DEFAULT:
+        assert profile_dir is not None
+        _set_profile_model(profile_dir, None, None)
+        console.print(f"\n[green]Profile model cleared.[/green] {profile} now uses {_global_default_label(config)}")
+        return
+
     if selected == _ADD_NEW:
         provider_name, model = _run_add_flow(config, config_file)
     else:
         provider_name, model = selected.split("/", 1)
+
+    if profile:
+        assert profile_dir is not None
+        _set_profile_model(profile_dir, provider_name, model)
+        console.print(f"\n[green]Profile model updated.[/green] {profile}")
+        console.print(f"  {provider_name}/{model}")
+        return
 
     config.default.provider = provider_name
     config.default.model = model
@@ -166,3 +202,33 @@ def _run_add_flow(config, config_file) -> tuple[str, str]:
     save_config(config, config_file)
 
     return provider_name, model
+
+
+def _global_default_label(config: AppConfig) -> str:
+    if config.default.provider and config.default.model:
+        return f"{config.default.provider}/{config.default.model}"
+    return "none"
+
+
+def _require_profile_dir(config: AppConfig, profile: str) -> Path:
+    root = config.paths.profiles_dir.expanduser()
+    profile_dir = root / profile
+    if not profile_dir.is_dir():
+        raise ValueError(f"Profile not found: {profile}")
+    return profile_dir
+
+
+def _set_profile_model(profile_dir: Path, provider: str | None, model: str | None) -> None:
+    toml_path = profile_dir / "profile.toml"
+    data: dict = {}
+    if toml_path.exists():
+        data = dict(tomllib.loads(toml_path.read_text(encoding="utf-8")))
+
+    if provider and model:
+        data["provider"] = provider
+        data["model"] = model
+    else:
+        data.pop("provider", None)
+        data.pop("model", None)
+
+    toml_path.write_bytes(tomli_w.dumps(data).encode())

@@ -21,7 +21,7 @@ from priests.memory.extractor import (
     mark_consolidated,
     trim_memories,
 )
-from priests.profile.config import load_profile_config
+from priests.profile.config import load_profile_config, resolve_provider_model
 from priests.service.routes.uploads import load_upload_images, save_turn_meta, update_turn_timestamps
 from priests.service.schemas import RunRequest
 
@@ -61,9 +61,10 @@ def _build_priest_request(
     if not body.no_think and config.default.think:
         provider_options["think"] = True
 
+    resolved_provider, resolved_model = resolve_provider_model(config, body.profile, body.provider, body.model)
     priest_config = PriestConfig(
-        provider=body.provider or config.default.provider,
-        model=body.model or config.default.model,
+        provider=resolved_provider,
+        model=resolved_model,
         timeout_seconds=config.default.timeout_seconds,
         max_output_tokens=body.max_output_tokens or config.default.max_output_tokens,
         max_system_chars=body.max_system_chars,

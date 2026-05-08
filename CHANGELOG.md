@@ -2,6 +2,20 @@
 
 All notable changes to `priests` are documented here.
 
+## [0.18.0] — 2026-05-08
+
+### Added
+- Profile-scoped model overrides via optional `provider` and `model` fields in `profile.toml`
+- `priests model default --profile <profile>` to set or clear a profile model override from the CLI
+- Profile Configuration web UI dropdown for selecting a profile model from added models
+- Repo-level `AGENTS.md` guidance and local development start commands in README
+
+### Fixed
+- Chat composer provider/model selectors now reflect the selected profile's scoped model before falling back to the global default
+- Chat message bubbles stay content-sized and align consistently with the composer column
+
+---
+
 ## [0.17.0] — 2026-04-25
 
 ### Added

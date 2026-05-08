@@ -40,6 +40,8 @@ class ProfileFilesOut(BaseModel):
     rules_md: str
     custom_md: str
     memories: bool
+    provider: str | None = None
+    model: str | None = None
 
 
 class ProfileFilesIn(BaseModel):
@@ -47,6 +49,8 @@ class ProfileFilesIn(BaseModel):
     rules_md: str | None = None
     custom_md: str | None = None
     memories: bool | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 class CreateProfileIn(BaseModel):
@@ -76,15 +80,21 @@ async def get_profile(name: str, request: Request) -> ProfileFilesOut:
     if not d.exists():
         raise HTTPException(status_code=404, detail=f"Profile {name!r} not found")
     memories = True
+    provider = None
+    model = None
     toml_path = d / "profile.toml"
     if toml_path.exists():
         data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
         memories = bool(data.get("memories", True))
+        provider = data.get("provider") or None
+        model = data.get("model") or None
     return ProfileFilesOut(
         profile_md=_read_md(d / "PROFILE.md"),
         rules_md=_read_md(d / "RULES.md"),
         custom_md=_read_md(d / "CUSTOM.md"),
         memories=memories,
+        provider=provider,
+        model=model,
     )
 
 
@@ -99,12 +109,24 @@ async def update_profile(name: str, body: ProfileFilesIn, request: Request) -> N
         (d / "RULES.md").write_text(body.rules_md, encoding="utf-8")
     if body.custom_md is not None:
         (d / "CUSTOM.md").write_text(body.custom_md, encoding="utf-8")
-    if body.memories is not None:
+    toml_fields = {"memories", "provider", "model"}
+    if body.model_fields_set & toml_fields:
         toml_path = d / "profile.toml"
         existing: dict = {}
         if toml_path.exists():
             existing = dict(tomllib.loads(toml_path.read_text(encoding="utf-8")))
-        existing["memories"] = body.memories
+        if "memories" in body.model_fields_set:
+            existing["memories"] = body.memories
+        if "provider" in body.model_fields_set:
+            if body.provider:
+                existing["provider"] = body.provider
+            else:
+                existing.pop("provider", None)
+        if "model" in body.model_fields_set:
+            if body.model:
+                existing["model"] = body.model
+            else:
+                existing.pop("model", None)
         toml_path.write_bytes(tomli_w.dumps(existing).encode())
 
 
@@ -118,6 +140,7 @@ async def create_profile(body: CreateProfileIn, request: Request) -> dict:
     (d / "PROFILE.md").write_text("", encoding="utf-8")
     (d / "RULES.md").write_text("", encoding="utf-8")
     (d / "CUSTOM.md").write_text("", encoding="utf-8")
+    (d / "profile.toml").write_text("memories = true\n", encoding="utf-8")
     return {"name": body.name}
 
 

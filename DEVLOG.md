@@ -1,5 +1,18 @@
 # DEVLOG
 
+## 2026-05-08 — v0.18.0 — profile-scoped model overrides
+
+- Profiles can now set optional `provider` and `model` fields in `profile.toml`; when both are set, they override the global default model for that profile
+- Explicit request/CLI provider and model values still take precedence over profile overrides
+- Web UI Profile Configuration now exposes the profile model override as a dropdown backed by the configured model list
+- Web UI chat composer now defaults its visible provider/model selectors to the selected profile's scoped model before falling back to the global default
+- Web UI message bubbles now use content-sized widths instead of expanding to their max-width caps
+- Web UI message list now reserves scrollbar gutter symmetrically so it aligns with the fixed composer column
+- `priests model default --profile <profile>` now sets or clears a profile model override from the CLI; the first choice clears the override and uses the global default
+- New profiles leave the scoped model unset so they continue following the global default model
+
+---
+
 ## 2026-05-07 — v0.17.2 — fix sidebar showing only profiles with sessions
 
 - Sidebar in the web UI now shows all profiles, including profiles with no chat sessions

@@ -41,6 +41,10 @@ _PROFILE_TOML_STUB = """\
 # Useful for tool profiles (dictionary, formatter, etc.) that don't need user memory.
 memories = true
 
+# Optional model override. Leave unset to use the global default model.
+# provider = "bailian"
+# model = "qwen-plus"
+
 # Override the global memory size limit for this profile (max characters in auto_short.md).
 # Uncomment to override.
 # memories_limit = 50000

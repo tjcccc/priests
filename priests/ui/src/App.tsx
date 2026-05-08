@@ -4,7 +4,7 @@ import { marked } from 'marked'
 import {
   fetchSessions, fetchSession, fetchUIMeta, fetchModels, fetchProfiles,
   putSessionTitle, putProfileEmoji, streamChat, uploadImage, fetchSessionUploads,
-  deleteSession, pinSession,
+  deleteSession, pinSession, fetchProfileFiles,
   SessionSummary, UIMeta, ModelsConfig, StreamMeta,
 } from './api'
 
@@ -169,6 +169,7 @@ export default function App() {
   const [modelsConfig, setModelsConfig] = useState<ModelsConfig | null>(null)
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null)
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
+  const [profileModel, setProfileModel] = useState<{ provider: string; model: string } | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -185,15 +186,28 @@ export default function App() {
 
   const currentEmoji = uiMeta.profile_emojis[selectedProfile] ?? '🙂'
 
+  const profileProvider = profileModel?.provider ?? null
+  const profileModelName = profileModel?.model ?? null
   const configuredProviders = [...new Set((modelsConfig?.configured_options ?? []).map(o => o.provider))]
   if (modelsConfig?.default_provider && !configuredProviders.includes(modelsConfig.default_provider)) {
     configuredProviders.unshift(modelsConfig.default_provider)
   }
-  const activeProvider = selectedProvider ?? modelsConfig?.default_provider ?? null
+  if (profileProvider && !configuredProviders.includes(profileProvider)) {
+    configuredProviders.unshift(profileProvider)
+  }
+  const activeProvider = selectedProvider ?? profileProvider ?? modelsConfig?.default_provider ?? null
   const modelsForProvider = (modelsConfig?.configured_options ?? [])
     .filter(o => o.provider === activeProvider)
     .map(o => o.model)
-  const activeModel = selectedModel ?? modelsForProvider[0] ?? modelsConfig?.default_model ?? null
+  const modelsForDropdown = [...modelsForProvider]
+  if (activeProvider === profileProvider && profileModelName && !modelsForDropdown.includes(profileModelName)) {
+    modelsForDropdown.unshift(profileModelName)
+  }
+  const activeModel = selectedModel
+    ?? (activeProvider === profileProvider ? profileModelName : null)
+    ?? modelsForProvider[0]
+    ?? modelsConfig?.default_model
+    ?? null
 
   const hasUploadingImages = attachedImages.some(img => img.uuid === null)
 
@@ -227,6 +241,21 @@ export default function App() {
     fetchUIMeta().then(setUiMeta)
     fetchModels().then(setModelsConfig)
   }, [loadSessions])
+
+  useEffect(() => {
+    let cancelled = false
+    setSelectedProvider(null)
+    setSelectedModel(null)
+    fetchProfileFiles(selectedProfile)
+      .then(files => {
+        if (cancelled) return
+        setProfileModel(files.provider && files.model ? { provider: files.provider, model: files.model } : null)
+      })
+      .catch(() => {
+        if (!cancelled) setProfileModel(null)
+      })
+    return () => { cancelled = true }
+  }, [selectedProfile])
 
   // Auto-select session from URL on initial load
   useEffect(() => {
@@ -660,7 +689,7 @@ export default function App() {
         </header>
 
         {/* Messages */}
-        <main className="flex-1 overflow-y-auto px-6 py-6">
+        <main className="flex-1 overflow-y-auto px-6 py-6" style={{ scrollbarGutter: 'stable both-edges' }}>
           <div className="max-w-[900px] mx-auto space-y-6">
             {messages.length === 0 && !streaming && (
               <div className="flex items-center justify-center min-h-[200px]">
@@ -670,7 +699,7 @@ export default function App() {
             {messages.map((msg, i) => (
               <div key={i} className={msg.role === 'user' ? 'flex justify-end' : ''}>
                 {msg.role === 'user' ? (
-                  <div className="bg-[#007AFF] text-white rounded-[18px] px-4 py-3 max-w-[560px] shadow-sm">
+                  <div className="bg-[#007AFF] text-white rounded-[18px] px-4 py-3 w-fit max-w-[560px] shadow-sm">
                     {msg.imagePreviews && msg.imagePreviews.length > 0 && (
                       <div className="flex flex-wrap gap-2 mb-2">
                         {msg.imagePreviews.map((src, j) => (
@@ -684,7 +713,7 @@ export default function App() {
                   </div>
                 ) : (
                   <div>
-                    <div className="bg-black/[0.04] rounded-[18px] px-5 py-4 max-w-[720px]">
+                    <div className="bg-black/[0.04] rounded-[18px] px-5 py-4 w-fit max-w-[720px]">
                       <div
                         className="chat-content text-[15px] leading-[1.6] text-black/90"
                         dangerouslySetInnerHTML={{ __html: renderMd(msg.content) }}
@@ -715,7 +744,7 @@ export default function App() {
             {/* Streaming bubble */}
             {streaming && (
               <div>
-                <div className="bg-black/[0.04] rounded-[18px] px-5 py-4 max-w-[720px]">
+                <div className="bg-black/[0.04] rounded-[18px] px-5 py-4 w-fit max-w-[720px]">
                   {streamingContent ? (
                     <>
                       <div
@@ -848,13 +877,13 @@ export default function App() {
                   )}
 
                   {/* Model dropdown */}
-                  {modelsForProvider.length > 0 && (
+                  {modelsForDropdown.length > 0 && (
                     <select
                       value={activeModel ?? ''}
                       onChange={e => setSelectedModel(e.target.value)}
                       className="bg-black/[0.04] hover:bg-black/[0.06] text-[12px] text-black/70 px-2.5 py-1.5 rounded-lg border-none outline-none cursor-pointer transition-colors max-w-[160px] truncate"
                     >
-                      {modelsForProvider.map(m => (
+                      {modelsForDropdown.map(m => (
                         <option key={m} value={m}>{m}</option>
                       ))}
                     </select>

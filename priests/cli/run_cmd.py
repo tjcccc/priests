@@ -17,6 +17,7 @@ from rich.markup import escape
 from priests.config.loader import load_config
 from priests.config.model import AppConfig
 from priests.engine_factory import NotInitializedError
+from priests.profile.config import resolve_provider_model
 
 run_app = typer.Typer(help="Run a prompt or enter interactive chat.")
 
@@ -45,10 +46,11 @@ def _insert_newline(event):
 _THINK_PROVIDERS = {"ollama", "bailian", "alibaba_cloud"}
 
 
-def _build_priest_config(config: AppConfig, provider: str | None, model: str | None, think: bool):
+def _build_priest_config(config: AppConfig, provider: str | None, model: str | None, profile: str, think: bool):
     from priest import PriestConfig
 
-    effective_provider = provider or config.default.provider or ""
+    resolved_provider, resolved_model = resolve_provider_model(config, profile, provider, model)
+    effective_provider = resolved_provider or ""
     if effective_provider in _THINK_PROVIDERS:
         provider_options: dict = {"think": think}
     else:
@@ -56,7 +58,7 @@ def _build_priest_config(config: AppConfig, provider: str | None, model: str | N
 
     return PriestConfig(
         provider=effective_provider,
-        model=model or config.default.model,
+        model=resolved_model,
         timeout_seconds=config.default.timeout_seconds,
         max_output_tokens=config.default.max_output_tokens,
         provider_options=provider_options,
@@ -215,7 +217,7 @@ async def _run_single(
     from priests.profile.config import load_profile_config
 
     engine, store = await build_engine(config)
-    priest_config = _build_priest_config(config, provider, model, think)
+    priest_config = _build_priest_config(config, provider, model, profile, think)
 
     profile_cfg = load_profile_config(config.paths.profiles_dir, profile)
     size_limit = profile_cfg.memories_limit if profile_cfg.memories_limit is not None else config.memory.size_limit
@@ -416,7 +418,7 @@ async def _run_chat(
         err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
 
-    priest_config = _build_priest_config(config, provider, model, think)
+    priest_config = _build_priest_config(config, provider, model, profile, think)
 
     profile_cfg = load_profile_config(config.paths.profiles_dir, profile)
     memories_on = memories if memories is not None else profile_cfg.memories

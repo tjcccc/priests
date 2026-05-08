@@ -32,6 +32,26 @@ priests init
 
 Walks you through selecting a provider, entering an API key, picking a model, and writing `~/.priests/priests.toml`.
 
+## Local development
+
+```bash
+uv sync
+uv run priests init
+uv run priests service start
+```
+
+Open `http://localhost:8777/ui`.
+
+When changing UI assets:
+
+```bash
+cd priests/ui
+npm install
+npm run build
+cd ../..
+uv run priests service start
+```
+
 ## Usage
 
 ```bash
@@ -49,6 +69,7 @@ priests run "your prompt" --think true --memories false
 priests model                    # show current default model
 priests model list               # list saved models
 priests model default            # interactively pick a new default
+priests model default --profile coder  # set/clear the model override for a profile
 priests model add                # add a new provider + model
 
 # Provider info
@@ -212,6 +233,22 @@ For tool profiles that don't need memory (formatters, dictionaries, etc.), set `
 ```toml
 # ~/.priests/profiles/json_master/profile.toml
 memories = false
+```
+
+Profiles can also override the global default model by setting both `provider` and `model`.
+Leave them unset to keep using `[default] provider` and `[default] model`.
+
+Set or clear the override from the CLI:
+
+```bash
+priests model default --profile coder
+```
+
+```toml
+# ~/.priests/profiles/coder/profile.toml
+provider = "bailian"
+model = "qwen-plus"
+memories = true
 ```
 
 ## Memory system

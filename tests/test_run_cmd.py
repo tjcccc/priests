@@ -193,3 +193,53 @@ def test_search_missing_extra_raises_runtime_error():
         else:
             sys.modules["ddgs"] = original
         importlib.reload(search_mod)
+
+
+# ---------------------------------------------------------------------------
+# Profile model resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_provider_model_uses_profile_pair(tmp_path):
+    from priests.config.model import AppConfig
+    from priests.profile.config import resolve_provider_model
+
+    profile_dir = tmp_path / "profiles" / "coder"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "profile.toml").write_text('provider = "bailian"\nmodel = "qwen-plus"\n')
+    config = AppConfig.model_validate({
+        "default": {"provider": "ollama", "model": "llama3"},
+        "paths": {"profiles_dir": str(tmp_path / "profiles")},
+    })
+
+    assert resolve_provider_model(config, "coder") == ("bailian", "qwen-plus")
+
+
+def test_resolve_provider_model_falls_back_to_default_when_profile_unset(tmp_path):
+    from priests.config.model import AppConfig
+    from priests.profile.config import resolve_provider_model
+
+    profile_dir = tmp_path / "profiles" / "plain"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "profile.toml").write_text("memories = true\n")
+    config = AppConfig.model_validate({
+        "default": {"provider": "ollama", "model": "llama3"},
+        "paths": {"profiles_dir": str(tmp_path / "profiles")},
+    })
+
+    assert resolve_provider_model(config, "plain") == ("ollama", "llama3")
+
+
+def test_resolve_provider_model_explicit_args_win_over_profile_pair(tmp_path):
+    from priests.config.model import AppConfig
+    from priests.profile.config import resolve_provider_model
+
+    profile_dir = tmp_path / "profiles" / "coder"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "profile.toml").write_text('provider = "bailian"\nmodel = "qwen-plus"\n')
+    config = AppConfig.model_validate({
+        "default": {"provider": "ollama", "model": "llama3"},
+        "paths": {"profiles_dir": str(tmp_path / "profiles")},
+    })
+
+    assert resolve_provider_model(config, "coder", "openai", "gpt-4.1") == ("openai", "gpt-4.1")

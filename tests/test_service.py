@@ -146,6 +146,70 @@ def test_run_forwards_images_base64(client):
     assert call_request.images[0].media_type == "image/png"
 
 
+def test_run_uses_profile_model_override(client, tmp_path):
+    c, engine, _ = client
+    profile_dir = tmp_path / "coder"
+    profile_dir.mkdir()
+    (profile_dir / "profile.toml").write_text('provider = "bailian"\nmodel = "qwen-plus"\n')
+    c.app.state.config.paths.profiles_dir = tmp_path
+    engine.run.return_value = _ok_response("profile model")
+
+    resp = c.post("/v1/run", json={"prompt": "hi", "profile": "coder"})
+
+    assert resp.status_code == 200
+    call_request = engine.run.call_args[0][0]
+    assert call_request.config.provider == "bailian"
+    assert call_request.config.model == "qwen-plus"
+
+
+def test_run_explicit_model_overrides_profile_model(client, tmp_path):
+    c, engine, _ = client
+    profile_dir = tmp_path / "coder"
+    profile_dir.mkdir()
+    (profile_dir / "profile.toml").write_text('provider = "bailian"\nmodel = "qwen-plus"\n')
+    c.app.state.config.paths.profiles_dir = tmp_path
+    engine.run.return_value = _ok_response("explicit model")
+
+    resp = c.post("/v1/run", json={
+        "prompt": "hi",
+        "profile": "coder",
+        "provider": "openai",
+        "model": "gpt-4.1",
+    })
+
+    assert resp.status_code == 200
+    call_request = engine.run.call_args[0][0]
+    assert call_request.config.provider == "openai"
+    assert call_request.config.model == "gpt-4.1"
+
+
+def test_profile_api_reads_and_writes_model_override(client, tmp_path):
+    c, _, _ = client
+    profile_dir = tmp_path / "coder"
+    profile_dir.mkdir()
+    (profile_dir / "PROFILE.md").write_text("profile")
+    (profile_dir / "RULES.md").write_text("rules")
+    (profile_dir / "CUSTOM.md").write_text("custom")
+    (profile_dir / "profile.toml").write_text("memories = true\n")
+    c.app.state.config.paths.profiles_dir = tmp_path
+
+    resp = c.put("/v1/profiles/coder", json={
+        "provider": "bailian",
+        "model": "qwen-plus",
+    })
+    assert resp.status_code == 204
+
+    body = c.get("/v1/profiles/coder").json()
+    assert body["provider"] == "bailian"
+    assert body["model"] == "qwen-plus"
+
+    resp = c.put("/v1/profiles/coder", json={"provider": None, "model": None})
+    assert resp.status_code == 204
+    body = c.get("/v1/profiles/coder").json()
+    assert body["provider"] is None
+    assert body["model"] is None
+
+
 # ---------------------------------------------------------------------------
 # /v1/chat tests
 # ---------------------------------------------------------------------------
