@@ -16,9 +16,10 @@ from priests.engine_factory import load_global_guide
 from priests.memory.extractor import (
     StreamingStripper,
     append_memories,
-    apply_consolidation,
+    apply_memory_proposals,
+    assemble_memory_entries,
+    build_memory_instructions,
     clean_last_turn,
-    mark_consolidated,
     trim_memories,
 )
 from priests.profile.config import load_profile_config, resolve_provider_model
@@ -28,11 +29,13 @@ from priests.service.schemas import RunRequest
 router = APIRouter()
 
 _APPEND_RE = re.compile(r"<memory_append>(.*?)</memory_append>", re.DOTALL | re.IGNORECASE)
+_PROPOSAL_RE = re.compile(r"<memory_proposal>(.*?)</memory_proposal>", re.DOTALL | re.IGNORECASE)
 _CONSOLIDATION_RE = re.compile(r"<memory_consolidation>(.*?)</memory_consolidation>", re.DOTALL | re.IGNORECASE)
 
 
 def _strip_memory_blocks(text: str) -> str:
     text = _APPEND_RE.sub("", text)
+    text = _PROPOSAL_RE.sub("", text)
     text = _CONSOLIDATION_RE.sub("", text)
     return text
 
@@ -54,6 +57,7 @@ def _build_priest_request(
     config: AppConfig,
     guide: str | None = None,
     upload_images: list[tuple[bytes, str]] | None = None,
+    memories: bool = True,
 ) -> PriestRequest:
     provider_options: dict = {}
     # Only forward think=True when explicitly enabled; never send think=False because
@@ -82,13 +86,23 @@ def _build_priest_request(
     if guide:
         base_context = [guide, *base_context]
 
+    profile_cfg = load_profile_config(config.paths.profiles_dir, body.profile)
+    memories_enabled = memories and profile_cfg.memories
+    request_memory = list(body.memory)
+    if memories_enabled:
+        memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
+        base_context.append(build_memory_instructions())
+        request_memory.extend(assemble_memory_entries(memories_dir, config.memory.context_limit))
+    else:
+        request_memory = []
+
     return PriestRequest(
         config=priest_config,
         profile=body.profile,
         prompt=body.prompt,
         session=session_ref,
         context=base_context,
-        memory=body.memory,
+        memory=request_memory,
         user_context=body.user_context,
         images=_build_images(body, upload_images),
         output=body.output,
@@ -116,15 +130,22 @@ async def _apply_memory(
                 else config.memory.size_limit
             )
             memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
-            if m := _CONSOLIDATION_RE.search(text):
-                try:
-                    apply_consolidation(memories_dir, json.loads(m.group(1).strip()))
-                    mark_consolidated(memories_dir)
-                except (json.JSONDecodeError, ValueError):
-                    pass
             if m := _APPEND_RE.search(text):
                 try:
-                    append_memories(memories_dir, json.loads(m.group(1).strip()))
+                    append_memories(
+                        memories_dir,
+                        json.loads(m.group(1).strip()),
+                        session_id=response.session.id if response.session else body.session_id,
+                    )
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            if m := _PROPOSAL_RE.search(text):
+                try:
+                    apply_memory_proposals(
+                        memories_dir,
+                        json.loads(m.group(1).strip()),
+                        session_id=response.session.id if response.session else body.session_id,
+                    )
                 except (json.JSONDecodeError, ValueError):
                     pass
             trim_memories(memories_dir, size_limit)
@@ -145,7 +166,7 @@ async def run_once(body: RunRequest, request: Request, memories: bool = True) ->
     db_path = str(request.app.state.db_path)
     guide = load_global_guide(config)
     upload_images = await load_upload_images(db_path, body.upload_uuids)
-    priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images)
+    priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images, memories=memories)
     store = request.app.state.store
     t0 = time.monotonic()
     response = await engine.run(priest_request)
@@ -173,7 +194,7 @@ async def chat(body: RunRequest, request: Request, memories: bool = True) -> Pri
 
     guide = load_global_guide(config)
     upload_images = await load_upload_images(db_path, body.upload_uuids)
-    priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images)
+    priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images, memories=memories)
     t0 = time.monotonic()
     response = await engine.run(priest_request)
     elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -191,7 +212,7 @@ async def _sse_generator(body: RunRequest, config: AppConfig, engine, store, db_
     """Async generator for SSE: yields 'data: ...\n\n' lines, filters memory blocks."""
     guide = load_global_guide(config)
     upload_images = await load_upload_images(db_path, body.upload_uuids)
-    priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images)
+    priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images, memories=memories)
     stripper = StreamingStripper()
     t0 = time.monotonic()
 
@@ -228,15 +249,14 @@ async def _sse_generator(body: RunRequest, config: AppConfig, engine, store, db_
                 else config.memory.size_limit
             )
             memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
-            if stripper.consolidation_json:
-                try:
-                    apply_consolidation(memories_dir, json.loads(stripper.consolidation_json))
-                    mark_consolidated(memories_dir)
-                except (json.JSONDecodeError, ValueError):
-                    pass
             if stripper.append_json:
                 try:
-                    append_memories(memories_dir, json.loads(stripper.append_json))
+                    append_memories(memories_dir, json.loads(stripper.append_json), session_id=body.session_id)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            if stripper.proposal_json:
+                try:
+                    apply_memory_proposals(memories_dir, json.loads(stripper.proposal_json), session_id=body.session_id)
                 except (json.JSONDecodeError, ValueError):
                     pass
             trim_memories(memories_dir, size_limit)

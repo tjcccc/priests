@@ -9,20 +9,24 @@ from __future__ import annotations
 
 import dataclasses
 import re
-import time
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
 from priests.memory.extractor import (
     AUTO_FILE,
     NOTES_FILE,
+    PENDING_DIR,
+    PREFERENCES_FILE,
     USER_FILE,
+    apply_memory_proposals,
+    assemble_memory_entries,
     append_memories,
     apply_consolidation,
     clean_last_turn,
     deduplicate_file,
-    mark_consolidated,
     needs_consolidation,
+    remember_preference,
+    remember_user,
     trim_memories,
 )
 
@@ -48,10 +52,13 @@ class _Session:
 # ---------------------------------------------------------------------------
 
 
-def test_append_memories_writes_user_file(tmp_path):
+def test_append_memories_user_key_creates_pending_proposal(tmp_path):
     append_memories(tmp_path, {"user": "Prefers dark mode."})
-    assert (tmp_path / USER_FILE).exists()
-    assert "Prefers dark mode." in (tmp_path / USER_FILE).read_text()
+    assert not (tmp_path / USER_FILE).exists()
+    proposals = list((tmp_path / PENDING_DIR).glob("*.md"))
+    assert len(proposals) == 1
+    assert "target: user" in proposals[0].read_text()
+    assert "Prefers dark mode." in proposals[0].read_text()
 
 
 def test_append_memories_auto_short_gets_today_header(tmp_path):
@@ -66,14 +73,37 @@ def test_append_memories_empty_fields_create_no_files(tmp_path):
     assert not (tmp_path / USER_FILE).exists()
     assert not (tmp_path / NOTES_FILE).exists()
     assert not (tmp_path / AUTO_FILE).exists()
+    assert not (tmp_path / PENDING_DIR).exists()
 
 
-def test_append_memories_re_append_adds_not_overwrites(tmp_path):
+def test_append_memories_re_append_creates_multiple_pending_files(tmp_path):
     append_memories(tmp_path, {"user": "Line one."})
     append_memories(tmp_path, {"user": "Line two."})
-    content = (tmp_path / USER_FILE).read_text()
-    assert "Line one." in content
-    assert "Line two." in content
+    contents = "\n".join(p.read_text() for p in (tmp_path / PENDING_DIR).glob("*.md"))
+    assert "Line one." in contents
+    assert "Line two." in contents
+
+
+def test_append_memories_notes_key_becomes_preferences_proposal(tmp_path):
+    append_memories(tmp_path, {"notes": "Likes concise replies."})
+    proposal = next((tmp_path / PENDING_DIR).glob("*.md"))
+    text = proposal.read_text()
+    assert "target: preferences" in text
+    assert "Likes concise replies." in text
+
+
+def test_apply_memory_proposals_writes_pending_markdown(tmp_path):
+    apply_memory_proposals(
+        tmp_path,
+        {"proposals": [{"target": "preferences", "content": "- Prefers examples.", "reason": "User said so."}]},
+        session_id="sess-1",
+    )
+    proposal = next((tmp_path / PENDING_DIR).glob("*.md"))
+    text = proposal.read_text()
+    assert "status: pending" in text
+    assert "target: preferences" in text
+    assert "session_id: sess-1" in text
+    assert "- Prefers examples." in text
 
 
 # ---------------------------------------------------------------------------
@@ -81,22 +111,10 @@ def test_append_memories_re_append_adds_not_overwrites(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_apply_consolidation_key_present_overwrites(tmp_path):
+def test_apply_consolidation_ignores_durable_keys(tmp_path):
     (tmp_path / USER_FILE).write_text("old content\n")
     apply_consolidation(tmp_path, {"user": "new content"})
-    assert (tmp_path / USER_FILE).read_text() == "new content\n"
-
-
-def test_apply_consolidation_key_absent_leaves_file_untouched(tmp_path):
-    (tmp_path / USER_FILE).write_text("original\n")
-    apply_consolidation(tmp_path, {"notes": "something"})
-    assert (tmp_path / USER_FILE).read_text() == "original\n"
-
-
-def test_apply_consolidation_empty_string_clears_file(tmp_path):
-    (tmp_path / USER_FILE).write_text("some content\n")
-    apply_consolidation(tmp_path, {"user": ""})
-    assert (tmp_path / USER_FILE).read_text() == ""
+    assert (tmp_path / USER_FILE).read_text() == "old content\n"
 
 
 def test_apply_consolidation_auto_short_without_header_gets_wrapped(tmp_path):
@@ -165,24 +183,60 @@ def test_trim_memories_single_section_never_dropped(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_needs_consolidation_no_sentinel_returns_true(tmp_path):
-    assert needs_consolidation(tmp_path) is True
-
-
-def test_needs_consolidation_all_files_older_returns_false(tmp_path):
+def test_needs_consolidation_disabled(tmp_path):
     (tmp_path / USER_FILE).write_text("facts")
-    (tmp_path / NOTES_FILE).write_text("notes")
-    (tmp_path / AUTO_FILE).write_text("# Short Memories\n")
-    time.sleep(0.02)
-    mark_consolidated(tmp_path)
     assert needs_consolidation(tmp_path) is False
 
 
-def test_needs_consolidation_newer_file_returns_true(tmp_path):
-    mark_consolidated(tmp_path)
-    time.sleep(0.02)
-    (tmp_path / USER_FILE).write_text("updated fact")
-    assert needs_consolidation(tmp_path) is True
+# ---------------------------------------------------------------------------
+# approved memory commands and assembly
+# ---------------------------------------------------------------------------
+
+
+def test_remember_user_and_preference_write_approved_files(tmp_path):
+    remember_user(tmp_path, "- User is Atlas.")
+    remember_preference(tmp_path, "- Prefers concise replies.")
+
+    assert "Atlas" in (tmp_path / USER_FILE).read_text()
+    assert "concise" in (tmp_path / PREFERENCES_FILE).read_text()
+
+
+def test_assemble_memory_entries_orders_short_term_last(tmp_path):
+    (tmp_path / USER_FILE).write_text("user fact")
+    (tmp_path / PREFERENCES_FILE).write_text("preference fact")
+    (tmp_path / NOTES_FILE).write_text("legacy note")
+    (tmp_path / AUTO_FILE).write_text("# Short Memories\n\n## 2026-01-01\n\nauto fact\n")
+
+    entries = assemble_memory_entries(tmp_path)
+
+    assert "Approved User Memory" in entries[0]
+    assert "Approved Preference Memory" in entries[1]
+    assert "Legacy Notes Memory" in entries[2]
+    assert "Short-Term Memory" in entries[3]
+
+
+def test_assemble_memory_entries_ignores_empty_stub_headers(tmp_path):
+    (tmp_path / USER_FILE).write_text("# User\n\n")
+    (tmp_path / PREFERENCES_FILE).write_text("# Preferences\n\n")
+    (tmp_path / AUTO_FILE).write_text("# Short Memories\n\n")
+
+    assert assemble_memory_entries(tmp_path) == []
+
+
+def test_assemble_memory_entries_context_limit_truncates_auto_short(tmp_path):
+    (tmp_path / USER_FILE).write_text("u" * 50)
+    (tmp_path / PREFERENCES_FILE).write_text("p" * 50)
+    auto_lines = ["# Short Memories\n"]
+    for day in range(1, 6):
+        auto_lines.append(f"\n## 2026-01-{day:02d}\n\n{'x' * 200}\n")
+    (tmp_path / AUTO_FILE).write_text("".join(auto_lines))
+
+    entries = assemble_memory_entries(tmp_path, context_limit=350)
+    combined = "\n".join(entries)
+
+    assert "u" * 50 in combined
+    assert "p" * 50 in combined
+    assert len(re.findall(r"## 2026-01-\d+", combined)) < 5
 
 
 # ---------------------------------------------------------------------------
@@ -297,12 +351,12 @@ async def test_clean_last_turn_user_last_turn_is_noop():
 
 
 def test_stripper_two_consecutive_blocks_both_captured():
-    """A consolidation block followed by an append block: both payloads extracted."""
+    """A proposal block followed by an append block: both payloads extracted."""
     from priests.memory.extractor import StreamingStripper
 
     text = (
-        '<memory_consolidation>{"user":"consolidated"}</memory_consolidation>'
-        '<memory_append>{"notes":"appended"}</memory_append>'
+        '<memory_proposal>{"proposals":[{"target":"user","content":"fact"}]}</memory_proposal>'
+        '<memory_append>{"auto_short":"appended"}</memory_append>'
         "prose after"
     )
     s = StreamingStripper()
@@ -311,8 +365,8 @@ def test_stripper_two_consecutive_blocks_both_captured():
         visible += s.feed(ch)
     visible += s.flush()
 
-    assert s.consolidation_json == '{"user":"consolidated"}'
-    assert s.append_json == '{"notes":"appended"}'
+    assert s.proposal_json == '{"proposals":[{"target":"user","content":"fact"}]}'
+    assert s.append_json == '{"auto_short":"appended"}'
     assert "prose after" in visible
     assert "<memory_" not in visible
 
@@ -330,104 +384,3 @@ def test_stripper_incomplete_block_discarded_at_flush():
     # Block content is captured internally (flush saves what it has)
     # but nothing is emitted as visible text during the block
     assert "<memory_append>" not in visible
-
-
-# ---------------------------------------------------------------------------
-# _build_memory_context — context_limit enforcement
-# ---------------------------------------------------------------------------
-
-
-def test_build_memory_context_truncates_auto_short_when_over_limit(tmp_path):
-    """On a consolidation turn, context_limit causes old auto_short sections to be dropped."""
-    from priests.cli.run_cmd import _build_memory_context
-
-    (tmp_path / "user.md").write_text("user fact")
-    (tmp_path / "notes.md").write_text("notes fact")
-
-    # Build a large auto_short with multiple dated sections
-    auto_lines = ["# Short Memories\n"]
-    for day in range(1, 10):
-        auto_lines.append(f"\n## 2026-01-{day:02d}\n\n{'x' * 200}\n")
-    (tmp_path / "auto_short.md").write_text("".join(auto_lines))
-
-    # Tight limit: user + notes + only a small slice of auto_short
-    context_limit = len("user fact") + len("notes fact") + 250
-
-    # consolidate=True is required — that's when file contents are injected
-    result = _build_memory_context(tmp_path, 50000, 0, True, context_limit)
-
-    assert "user fact" in result
-    assert "notes fact" in result
-    # Older dated sections must be gone; not all 9 sections should survive
-    auto_sections = re.findall(r"## 2026-01-\d+", result)
-    assert len(auto_sections) < 9
-
-
-def test_build_memory_context_single_oversized_section_hard_truncated(tmp_path):
-    """Hard tail-truncation kicks in when a single auto_short section exceeds the budget."""
-    from priests.cli.run_cmd import _build_memory_context
-
-    (tmp_path / "user.md").write_text("u" * 100)
-    (tmp_path / "notes.md").write_text("n" * 100)
-    # Single section larger than what the limit allows after user + notes
-    (tmp_path / "auto_short.md").write_text(
-        "# Short Memories\n\n## 2026-01-01\n\n" + "a" * 2000
-    )
-
-    context_limit = 300  # user(100) + notes(100) = 200 fixed; 100 left for auto
-
-    result = _build_memory_context(tmp_path, 50000, 0, True, context_limit)
-
-    assert "u" * 100 in result
-    assert "n" * 100 in result
-    # Some auto content is present (tail-truncated, not fully dropped)
-    assert "a" in result
-    # The full 2000-char run of 'a' must not be present
-    assert "a" * 2000 not in result
-
-
-def test_build_memory_context_zero_limit_injects_all(tmp_path):
-    """context_limit=0 (default off) injects full auto_short without truncation."""
-    from priests.cli.run_cmd import _build_memory_context
-
-    (tmp_path / "user.md").write_text("user fact")
-    (tmp_path / "auto_short.md").write_text(
-        "# Short Memories\n\n## 2026-01-01\n\n" + "detail " * 100
-    )
-
-    result = _build_memory_context(tmp_path, 50000, 0, True, 0)
-
-    assert "user fact" in result
-    assert "detail " * 5 in result  # bulk of auto_short content present
-
-
-# ---------------------------------------------------------------------------
-# deduplicate_file — interaction with needs_consolidation
-# ---------------------------------------------------------------------------
-
-
-def test_deduplicate_before_needs_consolidation_no_false_positive(tmp_path):
-    """Dedup that finds nothing to remove must not trigger consolidation."""
-    (tmp_path / "user.md").write_text("unique line A\nunique line B\n")
-    (tmp_path / "notes.md").write_text("unique note\n")
-    time.sleep(0.02)
-    mark_consolidated(tmp_path)
-
-    # Dedup finds nothing — no write, no mtime bump
-    deduplicate_file(tmp_path / "user.md")
-    deduplicate_file(tmp_path / "notes.md")
-
-    assert needs_consolidation(tmp_path) is False
-
-
-def test_deduplicate_before_needs_consolidation_dedup_write_visible(tmp_path):
-    """Dedup that removes lines bumps the mtime; needs_consolidation sees it."""
-    mark_consolidated(tmp_path)
-    time.sleep(0.02)
-    # Write files with duplicates AFTER the sentinel
-    (tmp_path / "user.md").write_text("line A\nline A\n")
-
-    deduplicate_file(tmp_path / "user.md")
-
-    # needs_consolidation should return True because user.md (post-dedup) is newer
-    assert needs_consolidation(tmp_path) is True

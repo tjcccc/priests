@@ -65,38 +65,6 @@ def _build_priest_config(config: AppConfig, provider: str | None, model: str | N
     )
 
 
-def _load_mem(path: Path) -> str:
-    """Read a memory file, returning empty string if absent."""
-    return path.read_text(encoding="utf-8").strip() if path.exists() else ""
-
-
-def _truncate_auto_short(content: str, max_chars: int) -> str:
-    """Return a version of content that fits within max_chars.
-
-    Drops complete ## YYYY-MM-DD sections oldest-first until it fits.
-    Never drops the last remaining section — callers must handle the case where
-    even the trimmed result exceeds max_chars.
-    Falls back to a raw tail-truncation only if no dated sections are found.
-    """
-    import re
-
-    if len(content) <= max_chars:
-        return content
-    sections = re.split(r"(?=\n## \d{4}-\d{2}-\d{2})", content)
-    if len(sections) <= 1:
-        # No dated sections — fall back to keeping the tail
-        return content[-max_chars:]
-    intro, dated = sections[0], list(sections[1:])
-    if len(dated) <= 1:
-        # Single dated section — never drop it
-        return content
-    while len(dated) > 1:
-        if len(intro + "".join(dated)) <= max_chars:
-            break
-        dated.pop(0)  # drop oldest section
-    return intro + "".join(dated)
-
-
 def _build_memory_context(
     memories_dir: Path,
     size_limit: int,
@@ -104,94 +72,14 @@ def _build_memory_context(
     consolidate: bool,
     context_limit: int = 0,
 ) -> str:
-    """Build the memory system prompt block for a turn.
+    """Compatibility wrapper for tests and older imports.
 
-    On consolidation turns the model receives the full file contents with
-    instructions to rewrite them. On all other turns the model still receives
-    the loaded contents so it can recall saved facts, plus the append instruction.
+    Memory content is now assembled into PriestRequest.memory. This function
+    returns only the app-level write/proposal instructions for request.context.
     """
-    from priests.memory.extractor import USER_FILE, NOTES_FILE, AUTO_FILE
+    from priests.memory.extractor import build_memory_instructions
 
-    # Pre-load all three files so we can apply the context cap before building parts.
-    user_content  = _load_mem(memories_dir / USER_FILE)
-    notes_content = _load_mem(memories_dir / NOTES_FILE)
-    auto_content  = _load_mem(memories_dir / AUTO_FILE)
-
-    if context_limit > 0:
-        fixed = len(user_content) + len(notes_content)
-        available = context_limit - fixed
-        if available <= 0:
-            auto_content = ""
-        else:
-            auto_content = _truncate_auto_short(auto_content, available)
-            # _truncate_auto_short never drops the last section even if it still
-            # exceeds available. Apply a hard tail-truncation as a final safety
-            # net so context_limit is always honoured.
-            if len(auto_content) > available:
-                auto_content = auto_content[-available:]
-
-    parts: list[str] = []
-
-    _mem_guide = (
-        "Memory key rules — write from YOUR perspective, third person:\n"
-        "  user       = WHO the user is: name, job, background, permanent preferences."
-        " Only add a fact here if it will still be true months from now.\n"
-        "  notes      = HOW you should behave: tone, language, role constraints."
-        " Only add a fact here if it applies to every future session.\n"
-        "  auto_short = WHAT is happening now: tasks, reminders, short-lived context."
-        " Use this for anything time-sensitive or session-specific."
-        " Format as dated sections: ## YYYY-MM-DD\\n\\n- fact\\n- fact\n"
-        "When in doubt: if it could expire, it belongs in auto_short, not user."
-    )
-
-    if consolidate:
-        size_hint = f" Trim auto_short to under {size_limit} characters." if size_limit > 0 else ""
-        flat_hint = (
-            f" Keep user.md and notes.md under {flat_line_cap} lines each."
-            if flat_line_cap > 0
-            else " Keep user.md and notes.md concise — remove redundant or outdated entries."
-        )
-        parts.append(
-            f"Your memory files need consolidation. Remove redundant or outdated facts,"
-            f" keep each file focused on its purpose, and output the result BEFORE your"
-            f" response.{size_hint}{flat_hint}\n\n"
-            f"**user.md** (permanent facts about who the user is):\n"
-            f"{user_content or '(empty)'}\n\n"
-            f"**notes.md** (permanent behavioural constraints for your role):\n"
-            f"{notes_content or '(empty)'}\n\n"
-            f"**auto_short.md** (time-sensitive tasks, reminders, short-lived context):\n"
-            f"{auto_content or '(empty)'}\n\n"
-            f"{_mem_guide}\n\n"
-            f"Output ONLY the consolidation block. Include ALL three keys — use an empty"
-            f" string to clear a file that should be empty after consolidation:\n\n"
-            f"<memory_consolidation>\n"
-            f'{{\"user\": \"...\", \"notes\": \"...\", \"auto_short\": \"...\"}}\n'
-            f"</memory_consolidation>"
-        )
-    else:
-        # On non-consolidation turns, still inject loaded memories so the model
-        # can recall saved facts throughout the session.
-        if user_content or notes_content or auto_content:
-            memo: list[str] = []
-            if user_content:
-                memo.append(f"**About the user (user.md):**\n{user_content}")
-            if notes_content:
-                memo.append(f"**Behavioural notes (notes.md):**\n{notes_content}")
-            if auto_content:
-                memo.append(f"**Recent context (auto_short.md):**\n{auto_content}")
-            parts.append("## Loaded Memories\n\n" + "\n\n".join(memo))
-
-    parts.append(
-        "If anything from this conversation is worth remembering, output it BEFORE "
-        "your response:\n\n"
-        "<memory_append>\n"
-        "{\"user\": \"...\", \"notes\": \"...\", \"auto_short\": \"...\"}\n"
-        "</memory_append>\n\n"
-        f"{_mem_guide}\n"
-        "Include only keys with new content. Omit the block entirely if nothing is worth saving."
-    )
-
-    return "\n\n---\n\n".join(parts)
+    return build_memory_instructions()
 
 
 async def _run_single(
@@ -211,8 +99,9 @@ async def _run_single(
     from priests.engine_factory import build_engine, load_global_guide
     from priests.memory.extractor import (
         StreamingStripper, clean_last_turn, pop_last_exchange,
-        append_memories, apply_consolidation, trim_memories, needs_consolidation,
-        mark_consolidated, deduplicate_file, USER_FILE, NOTES_FILE,
+        append_memories, apply_memory_proposals, trim_memories,
+        deduplicate_file, assemble_memory_entries, build_memory_instructions,
+        USER_FILE, PREFERENCES_FILE,
     )
     from priests.profile.config import load_profile_config
 
@@ -227,17 +116,10 @@ async def _run_single(
     turn_context = ["Running inside priests CLI."]
     if guide:
         turn_context = [guide, *turn_context]
-    consolidate = False
     if memories:
-        # Dedup runs before needs_consolidation so the sentinel check reflects
-        # the post-dedup state. A dedup write would otherwise bump mtime and
-        # falsely trigger consolidation on the next session.
         deduplicate_file(memories_dir / USER_FILE)
-        deduplicate_file(memories_dir / NOTES_FILE)
-        consolidate = needs_consolidation(memories_dir)
-        turn_context.append(
-            _build_memory_context(memories_dir, size_limit, config.memory.flat_line_cap, consolidate, config.memory.context_limit)
-        )
+        deduplicate_file(memories_dir / PREFERENCES_FILE)
+        turn_context.append(build_memory_instructions())
 
     session_ref = None
     if session_id:
@@ -249,6 +131,7 @@ async def _run_single(
         prompt=prompt,
         session=session_ref,
         context=turn_context,
+        memory=assemble_memory_entries(memories_dir, config.memory.context_limit) if memories else [],
     )
 
     start_ms = int(__import__("time").monotonic() * 1000)
@@ -281,16 +164,10 @@ async def _run_single(
 
     if memories:
         try:
-            did_consolidate = False
-            if stripper.consolidation_json:
-                apply_consolidation(memories_dir, json.loads(stripper.consolidation_json))
-                did_consolidate = True
-            elif consolidate:
-                did_consolidate = True
             if stripper.append_json:
-                append_memories(memories_dir, json.loads(stripper.append_json))
-            if did_consolidate:
-                mark_consolidated(memories_dir)
+                append_memories(memories_dir, json.loads(stripper.append_json), session_id=session_id)
+            if stripper.proposal_json:
+                apply_memory_proposals(memories_dir, json.loads(stripper.proposal_json), session_id=session_id)
             trim_memories(memories_dir, size_limit)
         except (json.JSONDecodeError, Exception):
             pass
@@ -382,8 +259,9 @@ _CHAT_HELP = """\
   [bold]/image clear[/bold]       Remove all pending images.
   [dim]Tip: pasting an image file path (Cmd+V) also auto-attaches it.[/dim]
   [bold]/search[/bold] [dim]<query>[/dim]    Run a web search; results are injected into the next message.
-  [bold]/remember[/bold] [dim]<text>[/dim]   Save text to today's short memory (auto_short.md).
-  [bold]/remember![/bold] [dim]<text>[/dim]  Save text to permanent notes (notes.md).
+  [bold]/remember[/bold] [dim]<text>[/dim]       Save text to today's short memory (auto_short.md).
+  [bold]/remember user[/bold] [dim]<text>[/dim]  Save approved durable user memory (user.md).
+  [bold]/remember pref[/bold] [dim]<text>[/dim]  Save approved durable preference memory (preferences.md).
   [bold]/help[/bold]              Show this message.\
 """
 
@@ -406,9 +284,10 @@ async def _run_chat(
     from priests.engine_factory import build_engine, load_global_guide
     from priests.memory.extractor import (
         StreamingStripper, clean_last_turn, pop_last_exchange,
-        append_memories, apply_consolidation, trim_memories, needs_consolidation,
-        mark_consolidated, deduplicate_file, _append_to_file, _append_to_auto_short,
-        USER_FILE, NOTES_FILE, AUTO_FILE,
+        append_memories, apply_memory_proposals, trim_memories,
+        deduplicate_file, assemble_memory_entries, build_memory_instructions,
+        remember_short, remember_user, remember_preference,
+        USER_FILE, PREFERENCES_FILE,
     )
     from priests.profile.config import load_profile_config
 
@@ -500,15 +379,10 @@ async def _run_chat(
         key_bindings=merge_key_bindings([_chat_kb, _local_kb])
     )
 
-    # Dedup runs before needs_consolidation so the sentinel check reflects the
-    # post-dedup state. A dedup write would otherwise bump mtime and falsely
-    # trigger consolidation on the next session.
+    # Keep approved durable memory tidy without giving the model rewrite access.
     if memories_on:
         deduplicate_file(memories_dir / USER_FILE)
-        deduplicate_file(memories_dir / NOTES_FILE)
-    # Consolidation triggers once per session start if memories changed.
-    consolidation_needed = memories_on and needs_consolidation(memories_dir)
-    consolidation_done = False
+        deduplicate_file(memories_dir / PREFERENCES_FILE)
 
     # Pending web search results to inject into the next user message.
     _search_context: str | None = None
@@ -559,13 +433,9 @@ async def _run_chat(
                 elif cmd == "/new":
                     sid = str(uuid.uuid4())
                     session_ref = SessionRef(id=sid, create_if_missing=True)
-                    # Reset consolidation state so the new session can trigger
-                    # consolidation if memory files changed during the previous one.
                     if memories_on:
                         deduplicate_file(memories_dir / USER_FILE)
-                        deduplicate_file(memories_dir / NOTES_FILE)
-                        consolidation_needed = needs_consolidation(memories_dir)
-                    consolidation_done = False
+                        deduplicate_file(memories_dir / PREFERENCES_FILE)
                     console.print(f"[dim]New session: {sid}[/dim]")
                     continue
 
@@ -618,14 +488,32 @@ async def _run_chat(
                     continue
 
                 elif raw.lower().startswith("/remember! "):
-                    content = raw[len("/remember! "):].strip()
+                    err_console.print(
+                        "[yellow]/remember! no longer writes notes.md.[/yellow] "
+                        "Use /remember user <text> or /remember pref <text> for approved durable memory."
+                    )
+                    continue
+
+                elif raw.lower().startswith("/remember user "):
+                    content = raw[len("/remember user "):].strip()
                     if not content:
-                        err_console.print("[yellow]Usage:[/yellow] /remember! <text>")
+                        err_console.print("[yellow]Usage:[/yellow] /remember user <text>")
                     elif not memories_on:
                         err_console.print("[yellow]Memories are disabled for this profile.[/yellow]")
                     else:
-                        _append_to_file(memories_dir / NOTES_FILE, content)
-                        console.print("[dim]Saved to notes.md.[/dim]")
+                        remember_user(memories_dir, content)
+                        console.print("[dim]Saved to user.md.[/dim]")
+                    continue
+
+                elif raw.lower().startswith("/remember pref "):
+                    content = raw[len("/remember pref "):].strip()
+                    if not content:
+                        err_console.print("[yellow]Usage:[/yellow] /remember pref <text>")
+                    elif not memories_on:
+                        err_console.print("[yellow]Memories are disabled for this profile.[/yellow]")
+                    else:
+                        remember_preference(memories_dir, content)
+                        console.print("[dim]Saved to preferences.md.[/dim]")
                     continue
 
                 elif raw.lower().startswith("/remember "):
@@ -635,7 +523,7 @@ async def _run_chat(
                     elif not memories_on:
                         err_console.print("[yellow]Memories are disabled for this profile.[/yellow]")
                     else:
-                        _append_to_auto_short(memories_dir / AUTO_FILE, content)
+                        remember_short(memories_dir, content)
                         console.print("[dim]Saved to auto_short.md.[/dim]")
                     continue
 
@@ -644,13 +532,12 @@ async def _run_chat(
                     continue
 
             # --- Build turn system context ---
-            do_consolidate = consolidation_needed and not consolidation_done
             if memories_on:
-                turn_context = [*context_base, _build_memory_context(
-                    memories_dir, size_limit, config.memory.flat_line_cap, do_consolidate, config.memory.context_limit
-                )]
+                turn_context = [*context_base, build_memory_instructions()]
+                turn_memory = assemble_memory_entries(memories_dir, config.memory.context_limit)
             else:
                 turn_context = context_base
+                turn_memory = []
 
             # --- Normal prompt ---
             # Auto-detect image file paths pasted via Cmd+V and replace with markers.
@@ -672,6 +559,7 @@ async def _run_chat(
                 prompt=raw,
                 session=session_ref,
                 context=turn_context,
+                memory=turn_memory,
                 user_context=user_context,
                 images=images,
             )
@@ -717,6 +605,7 @@ async def _run_chat(
                     prompt=raw,
                     session=session_ref,
                     context=turn_context,
+                    memory=turn_memory,
                     user_context=[tool_context],
                     images=images,
                 )
@@ -794,17 +683,10 @@ async def _run_chat(
 
             if memories_on:
                 try:
-                    if stripper.consolidation_json:
-                        apply_consolidation(memories_dir, json.loads(stripper.consolidation_json))
-                        consolidation_done = True
-                    elif do_consolidate:
-                        consolidation_done = True
                     if stripper.append_json:
-                        append_memories(memories_dir, json.loads(stripper.append_json))
-                    # Touch sentinel AFTER all writes so it's always newer than memory files.
-                    # This prevents consolidation from re-triggering every session.
-                    if consolidation_done:
-                        mark_consolidated(memories_dir)
+                        append_memories(memories_dir, json.loads(stripper.append_json), session_id=sid)
+                    if stripper.proposal_json:
+                        apply_memory_proposals(memories_dir, json.loads(stripper.proposal_json), session_id=sid)
                     trim_memories(memories_dir, size_limit)
                 except (json.JSONDecodeError, Exception):
                     pass

@@ -2,6 +2,22 @@
 
 All notable changes to `priests` are documented here.
 
+## [0.19.0] — 2026-05-08
+
+### Added
+- App-owned chat memory policy in `priests`, separate from `priest` core profile loading
+- Approved durable memory files: `user.md` for stable user facts and `preferences.md` for user preferences
+- Pending durable memory proposals under `memories/pending/`
+- `/remember user <text>` and `/remember pref <text>` for explicit durable memory writes
+
+### Changed
+- Chat runtime now passes selected memory through `PriestRequest.memory` and loads profiles with `include_memories=False`
+- Model-generated durable memory updates are saved as pending proposals instead of silently rewriting approved memory files
+- `notes.md` is treated as a legacy read-only memory file
+- Durable consolidation is disabled; only short-term `auto_short.md` remains automatically writable
+
+---
+
 ## [0.18.0] — 2026-05-08
 
 ### Added

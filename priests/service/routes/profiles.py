@@ -141,6 +141,8 @@ async def create_profile(body: CreateProfileIn, request: Request) -> dict:
     (d / "RULES.md").write_text("", encoding="utf-8")
     (d / "CUSTOM.md").write_text("", encoding="utf-8")
     (d / "profile.toml").write_text("memories = true\n", encoding="utf-8")
+    from priests.engine_factory import _scaffold_memories
+    _scaffold_memories(d / "memories")
     return {"name": body.name}
 
 

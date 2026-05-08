@@ -1025,7 +1025,7 @@ export default function ConfigPage() {
                         <NumberInput value={memory.context_limit}
                           onChange={v => setMemory(m => m ? { ...m, context_limit: v } : m)} min={0} />
                       </Field>
-                      <Field label="Flat line cap" note="Soft line cap for user.md / notes.md. 0 = no hint.">
+                      <Field label="Flat line cap" note="Legacy setting kept for config compatibility.">
                         <NumberInput value={memory.flat_line_cap}
                           onChange={v => setMemory(m => m ? { ...m, flat_line_cap: v } : m)} min={0} />
                       </Field>

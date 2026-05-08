@@ -1,8 +1,4 @@
-"""Tests for priests/cli/run_cmd.py helpers.
-
-Covers _build_memory_context (both branches) and priests/search.py.
-The _run_chat loop itself is not tested here — too much async REPL machinery.
-"""
+"""Tests for priests/cli/run_cmd.py helpers and priests/search.py."""
 
 from __future__ import annotations
 
@@ -11,73 +7,60 @@ from unittest.mock import MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
-# _build_memory_context — consolidate=False (Loaded Memories branch)
+# _build_memory_context compatibility wrapper
 # ---------------------------------------------------------------------------
 
 
-def test_build_memory_context_non_consolidation_all_files(tmp_path):
-    """All three files populated: all three sections appear in output."""
+def test_build_memory_context_returns_write_policy_not_memory_content(tmp_path):
     from priests.cli.run_cmd import _build_memory_context
 
     (tmp_path / "user.md").write_text("user fact")
-    (tmp_path / "notes.md").write_text("notes fact")
+    (tmp_path / "preferences.md").write_text("pref fact")
     (tmp_path / "auto_short.md").write_text("# Short Memories\n\n## 2026-01-01\n\nauto fact\n")
 
     result = _build_memory_context(tmp_path, 50000, 0, False)
 
-    assert "## Loaded Memories" in result
-    assert "user fact" in result
-    assert "notes fact" in result
-    assert "auto fact" in result
+    assert "Memory policy for priests" in result
+    assert "memory_append" in result
+    assert "memory_proposal" in result
+    assert "user fact" not in result
+    assert "auto fact" not in result
 
 
-def test_build_memory_context_non_consolidation_partial_files(tmp_path):
-    """Only populated files appear — missing files produce no section."""
-    from priests.cli.run_cmd import _build_memory_context
+def test_assemble_memory_entries_holds_loaded_memory(tmp_path):
+    from priests.memory.extractor import assemble_memory_entries
 
     (tmp_path / "user.md").write_text("user fact")
-    # notes.md and auto_short.md absent
+    (tmp_path / "preferences.md").write_text("pref fact")
+    (tmp_path / "notes.md").write_text("legacy fact")
+    (tmp_path / "auto_short.md").write_text("# Short Memories\n\n## 2026-01-01\n\nauto fact\n")
 
-    result = _build_memory_context(tmp_path, 50000, 0, False)
+    entries = assemble_memory_entries(tmp_path)
 
-    assert "## Loaded Memories" in result
-    assert "user fact" in result
-    assert "notes" not in result.lower() or "Behavioural notes" not in result
-    assert "Recent context" not in result
-
-
-def test_build_memory_context_non_consolidation_no_files(tmp_path):
-    """No memory files: Loaded Memories header must not appear."""
-    from priests.cli.run_cmd import _build_memory_context
-
-    result = _build_memory_context(tmp_path, 50000, 0, False)
-
-    assert "## Loaded Memories" not in result
-    # The append instruction should still be present
-    assert "memory_append" in result
+    assert "user fact" in entries[0]
+    assert "pref fact" in entries[1]
+    assert "legacy fact" in entries[2]
+    assert "auto fact" in entries[3]
 
 
-def test_build_memory_context_non_consolidation_context_limit(tmp_path):
-    """context_limit truncates auto_short on non-consolidation turns too."""
-    from priests.cli.run_cmd import _build_memory_context
+def test_assemble_memory_entries_context_limit(tmp_path):
+    from priests.memory.extractor import assemble_memory_entries
 
     (tmp_path / "user.md").write_text("u" * 50)
-    (tmp_path / "notes.md").write_text("n" * 50)
-    # Large auto_short with multiple sections
+    (tmp_path / "preferences.md").write_text("p" * 50)
     auto_lines = ["# Short Memories\n"]
     for day in range(1, 6):
         auto_lines.append(f"\n## 2026-01-{day:02d}\n\n{'x' * 200}\n")
     (tmp_path / "auto_short.md").write_text("".join(auto_lines))
 
-    # Tight limit: user + notes + only a small slice of auto_short
     context_limit = 50 + 50 + 250
 
-    result = _build_memory_context(tmp_path, 50000, 0, False, context_limit)
+    result = "\n".join(assemble_memory_entries(tmp_path, context_limit))
 
     assert "u" * 50 in result
-    assert "n" * 50 in result
+    assert "p" * 50 in result
     sections = re.findall(r"## 2026-01-\d+", result)
-    assert len(sections) < 5  # older sections must have been dropped
+    assert len(sections) < 5
 
 
 def test_build_memory_context_non_consolidation_no_consolidation_block(tmp_path):
@@ -90,34 +73,6 @@ def test_build_memory_context_non_consolidation_no_consolidation_block(tmp_path)
 
     assert "<memory_consolidation>" not in result
     assert "memory_consolidation" not in result
-
-
-# ---------------------------------------------------------------------------
-# _build_memory_context — flat_line_cap hint on consolidation turns
-# ---------------------------------------------------------------------------
-
-
-def test_build_memory_context_flat_line_cap_hint_present(tmp_path):
-    """flat_line_cap > 0 embeds the line count in the consolidation hint."""
-    from priests.cli.run_cmd import _build_memory_context
-
-    (tmp_path / "user.md").write_text("user fact")
-
-    result = _build_memory_context(tmp_path, 50000, 20, True)
-
-    assert "20 lines" in result
-
-
-def test_build_memory_context_flat_line_cap_zero_generic_hint(tmp_path):
-    """flat_line_cap=0 uses the generic 'keep concise' wording."""
-    from priests.cli.run_cmd import _build_memory_context
-
-    (tmp_path / "user.md").write_text("user fact")
-
-    result = _build_memory_context(tmp_path, 50000, 0, True)
-
-    assert "concise" in result
-    assert "lines each" not in result
 
 
 # ---------------------------------------------------------------------------

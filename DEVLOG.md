@@ -1,5 +1,17 @@
 # DEVLOG
 
+## 2026-05-08 — v0.19.0 — app-owned chat memory policy
+
+- `priests` now owns chat memory semantics instead of re-exporting `priest.memory`
+- Long-term memory is split into approved `user.md` and `preferences.md`, legacy read-only `notes.md`, short-term `auto_short.md`, and pending durable proposals under `memories/pending/`
+- Runtime memory is assembled and passed to `priest` through `PriestRequest.memory`; profile loading disables core `memories/` injection with `include_memories=False`
+- Model output may auto-write only short-term memory; durable user facts and preferences become pending Markdown proposals for user/runtime approval
+- CLI and service memory paths now share the same assembler, instruction block, proposal capture, and write policy
+- `/remember user` and `/remember pref` write approved durable memory explicitly; plain `/remember` writes short-term memory
+- Durable consolidation is disabled for now to avoid silent deletion or model-generated rewrites of user-authored memory
+
+---
+
 ## 2026-05-08 — v0.18.0 — profile-scoped model overrides
 
 - Profiles can now set optional `provider` and `model` fields in `profile.toml`; when both are set, they override the global default model for that profile

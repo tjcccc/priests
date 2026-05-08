@@ -5,11 +5,11 @@ Run with:
 """
 
 import json
-import time
 
 from priests.memory.extractor import (
     StreamingStripper,
     append_memories,
+    apply_memory_proposals,
     needs_consolidation,
     trim_memories,
 )
@@ -21,7 +21,7 @@ from priests.memory.extractor import (
 _APPEND_PAYLOAD = json.dumps(
     {
         "user": "Prefers dark mode. Uses Neovim.",
-        "notes": "Working on priests v0.2 memory system.",
+        "preferences": "Prefers concise technical explanations.",
         "auto_short": "Discussed benchmark tooling for extractor.py.",
     }
 )
@@ -39,17 +39,16 @@ _STREAM_NO_TAGS = (
     "pytest-benchmark measures min, mean, max, and stddev per function. " * 100
 )
 
-# A consolidation turn: model rewrites all memory files
-_CONSOLIDATION_PAYLOAD = json.dumps(
+# A proposal turn: model suggests durable memory for later approval
+_PROPOSAL_PAYLOAD = json.dumps(
     {
-        "user": "Prefers dark mode. Uses Neovim. Runs macOS.",
-        "notes": "Actively developing priests v0.2 memory and benchmark infrastructure.",
-        "auto_short": "## 2026-04-07\n\nBenchmarked StreamingStripper and file I/O.",
+        "user": "Uses Neovim on macOS.",
+        "preferences": "Prefers concise technical explanations.",
     }
 )
-_STREAM_WITH_CONSOLIDATION = (
-    f"<memory_consolidation>{_CONSOLIDATION_PAYLOAD}</memory_consolidation>"
-    "I have updated your memory files with the latest context. " * 20
+_STREAM_WITH_PROPOSAL = (
+    f"<memory_proposal>{_PROPOSAL_PAYLOAD}</memory_proposal>"
+    "I have prepared durable memory proposals for review. " * 20
 )
 
 
@@ -110,13 +109,13 @@ def test_bench_stripper_append_block(benchmark):
     benchmark(run)
 
 
-def test_bench_stripper_consolidation_block(benchmark):
-    """<memory_consolidation> block at front, 32-byte chunks."""
+def test_bench_stripper_proposal_block(benchmark):
+    """<memory_proposal> block at front, 32-byte chunks."""
 
     def run():
         s = StreamingStripper()
-        for i in range(0, len(_STREAM_WITH_CONSOLIDATION), 32):
-            s.feed(_STREAM_WITH_CONSOLIDATION[i : i + 32])
+        for i in range(0, len(_STREAM_WITH_PROPOSAL), 32):
+            s.feed(_STREAM_WITH_PROPOSAL[i : i + 32])
         s.flush()
 
     benchmark(run)
@@ -135,34 +134,12 @@ def test_bench_stripper_block_split_across_chunks(benchmark):
 
 
 # ---------------------------------------------------------------------------
-# needs_consolidation — called every turn
+# needs_consolidation — compatibility no-op
 # ---------------------------------------------------------------------------
 
 
-def test_bench_needs_consolidation_no_sentinel(benchmark, tmp_path):
-    """Sentinel absent — returns True immediately (fast path)."""
-    benchmark(needs_consolidation, tmp_path)
-
-
-def test_bench_needs_consolidation_up_to_date(benchmark, tmp_path):
-    """All files older than sentinel — steady-state check cost."""
-    (tmp_path / "user.md").write_text("Prefers Neovim.")
-    (tmp_path / "notes.md").write_text("Working on v0.2.")
-    (tmp_path / "auto_short.md").write_text("# Short Memories\n")
-    time.sleep(0.02)
-    (tmp_path / ".last_consolidated").touch()
-
-    benchmark(needs_consolidation, tmp_path)
-
-
-def test_bench_needs_consolidation_stale(benchmark, tmp_path):
-    """One file newer than sentinel — returns True after full stat scan."""
-    (tmp_path / ".last_consolidated").touch()
-    time.sleep(0.02)
-    (tmp_path / "user.md").write_text("Updated fact.")
-    (tmp_path / "notes.md").write_text("Notes.")
-    (tmp_path / "auto_short.md").write_text("# Short Memories\n")
-
+def test_bench_needs_consolidation_disabled(benchmark, tmp_path):
+    """Durable consolidation is disabled in the current chat memory policy."""
     benchmark(needs_consolidation, tmp_path)
 
 
@@ -171,11 +148,11 @@ def test_bench_needs_consolidation_stale(benchmark, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_bench_append_memories_all_fields(benchmark, tmp_path):
-    """Append to all three memory files."""
+def test_bench_append_memories_auto_and_pending(benchmark, tmp_path):
+    """Append short-term memory and route durable fields to pending proposals."""
     payload = {
         "user": "Prefers dark mode.",
-        "notes": "v0.2 work ongoing.",
+        "preferences": "Prefers concise answers.",
         "auto_short": "Discussed benchmarking.",
     }
     benchmark(append_memories, tmp_path, payload)
@@ -185,6 +162,15 @@ def test_bench_append_memories_auto_short_only(benchmark, tmp_path):
     """Append only auto_short — most frequent write (every turn that saves)."""
     payload = {"auto_short": "Resolved import error in engine_factory.py."}
     benchmark(append_memories, tmp_path, payload)
+
+
+def test_bench_apply_memory_proposals(benchmark, tmp_path):
+    """Write one pending proposal Markdown file per durable memory target."""
+    proposals = {
+        "user": "Uses Neovim on macOS.",
+        "preferences": "Prefers concise technical explanations.",
+    }
+    benchmark(apply_memory_proposals, tmp_path, proposals)
 
 
 # ---------------------------------------------------------------------------

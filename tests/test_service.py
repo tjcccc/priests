@@ -100,12 +100,14 @@ def test_run_memories_false_skips_store(client):
     engine.run.return_value = _ok_response("ok", session_id="sess-1")
     with patch("priests.service.routes.run.clean_last_turn", new=AsyncMock()), \
          patch("priests.service.routes.run.append_memories") as mock_append, \
-         patch("priests.service.routes.run.apply_consolidation") as mock_consol, \
+         patch("priests.service.routes.run.apply_memory_proposals") as mock_proposals, \
          patch("priests.service.routes.run.trim_memories") as mock_trim:
         resp = c.post("/v1/run?memories=false", json={"prompt": "hi"})
     assert resp.status_code == 200
+    call_request = engine.run.call_args[0][0]
+    assert call_request.memory == []
     mock_append.assert_not_called()
-    mock_consol.assert_not_called()
+    mock_proposals.assert_not_called()
     mock_trim.assert_not_called()
 
 
@@ -181,6 +183,32 @@ def test_run_explicit_model_overrides_profile_model(client, tmp_path):
     call_request = engine.run.call_args[0][0]
     assert call_request.config.provider == "openai"
     assert call_request.config.model == "gpt-4.1"
+
+
+def test_run_assembles_profile_memory_into_request_memory(client, tmp_path):
+    c, engine, _ = client
+    profile_dir = tmp_path / "coder"
+    memories_dir = profile_dir / "memories"
+    memories_dir.mkdir(parents=True)
+    (profile_dir / "PROFILE.md").write_text("profile")
+    (profile_dir / "profile.toml").write_text("memories = true\n")
+    (memories_dir / "user.md").write_text("User fact.")
+    (memories_dir / "preferences.md").write_text("Preference fact.")
+    (memories_dir / "notes.md").write_text("Legacy fact.")
+    (memories_dir / "auto_short.md").write_text("# Short Memories\n\n## 2026-01-01\n\nShort fact.\n")
+    c.app.state.config.paths.profiles_dir = tmp_path
+    engine.run.return_value = _ok_response("memory")
+
+    resp = c.post("/v1/run", json={"prompt": "hi", "profile": "coder"})
+
+    assert resp.status_code == 200
+    call_request = engine.run.call_args[0][0]
+    combined = "\n".join(call_request.memory)
+    assert "User fact." in combined
+    assert "Preference fact." in combined
+    assert "Legacy fact." in combined
+    assert "Short fact." in combined
+    assert any("Memory policy for priests" in ctx for ctx in call_request.context)
 
 
 def test_profile_api_reads_and_writes_model_override(client, tmp_path):

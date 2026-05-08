@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "priests"
-version = "0.18.0"
+version = "0.19.0"
 description = "CLI tool and HTTP service for priest AI orchestration"
 requires-python = ">=3.11"
 dependencies = [
-    "priest-core>=2.2.0",
+    "priest-core>=2.3.0",
     "typer>=0.12",
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
@@ -44,6 +44,6 @@ exclude = ["priests/ui/node_modules"]
 asyncio_mode = "auto"
 
 # Local dev only — remove this section when developing without a sibling priest checkout.
-# PyPI resolves priest-core>=2.2.0 automatically when this block is absent.
+# PyPI resolves priest-core>=2.3.0 automatically when this block is absent.
 [tool.uv.sources]
 priest-core = { path = "../priest", editable = true }

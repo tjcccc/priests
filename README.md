@@ -108,7 +108,8 @@ Inside `priests run` interactive mode:
 | `/new` | Start a new session |
 | `/search <query>` | Run a web search; results injected into your next message (requires `priests[search]`) |
 | `/remember <text>` | Save text directly to today's short memory (`auto_short.md`) |
-| `/remember! <text>` | Save text directly to permanent notes (`notes.md`) |
+| `/remember user <text>` | Save approved durable user memory (`user.md`) |
+| `/remember pref <text>` | Save approved durable preference memory (`preferences.md`) |
 | `/exit` | Exit the chat |
 
 Ctrl+J inserts a newline. Enter submits.
@@ -207,10 +208,11 @@ profiles/
     RULES.md        # behavior and constraints (plain language)
     CUSTOM.md       # user customization
     profile.toml    # per-profile settings (memories on/off)
-    memories/       # persistent memory files written automatically
+    memories/       # persistent memory files assembled by priests
       user.md           # stable facts about the user (permanent)
-      notes.md          # role constraints and behavioural context (permanent)
+      preferences.md    # approved user preferences (permanent)
       auto_short.md     # time-sensitive observations, tasks, reminders (rolling)
+      pending/          # durable memory proposals awaiting approval
 ```
 
 Create a new profile:
@@ -253,19 +255,31 @@ memories = true
 
 ## Memory system
 
-priests uses a model-driven memory system. After each turn the model emits a structured block before its response; priests extracts it and writes the content to the profile's `memories/` directory. These files are loaded automatically at the start of every future session.
+priests owns the chat-app memory policy and passes assembled memory to `priest` through the special request `memory` lane. The core `priest` framework remains generic; it does not decide what `user.md`, `preferences.md`, or `auto_short.md` mean.
 
-Three files serve different scopes:
+Profile files and memory files have different authority:
 
 | File | Use for |
 |------|---------|
-| `user.md` | Stable facts about the user (name, background, permanent preferences) |
-| `notes.md` | Behavioural constraints for the profile role |
-| `auto_short.md` | Time-sensitive observations, tasks, reminders — rolling, trimmed by `size_limit` |
+| `PROFILE.md` | Assistant identity/persona |
+| `RULES.md` | Human-authored hard behavior rules |
+| `CUSTOM.md` | Human-authored profile setup/context |
+| `memories/user.md` | Approved stable facts about the user |
+| `memories/preferences.md` | Approved stable user preferences, lower priority than profile docs |
+| `memories/auto_short.md` | Time-sensitive observations, tasks, reminders — rolling, trimmed by `size_limit` |
+| `memories/pending/*.md` | Durable memory proposals awaiting user approval |
+
+Legacy `memories/notes.md` is still read if present, but priests treats it as read-only legacy memory and no longer writes to it automatically.
+
+Model-generated memory is intentionally conservative:
+
+| Policy | Behavior |
+|--------|----------|
+| Auto-applied | Only short-term `auto_short` entries |
+| Proposed | Durable `user` / `preferences` entries, saved under `pending/` |
+| Never auto-written | `PROFILE.md`, `RULES.md`, `CUSTOM.md`, `profile.toml`, legacy `notes.md` |
 
 `auto_short.md` uses dated sections (`## YYYY-MM-DD`). Oldest sections are dropped automatically once the file exceeds `memory.size_limit` characters.
-
-At the start of a session, if any memory file has changed since the last run, the model consolidates all three files before responding — removing redundant or outdated facts.
 
 To disable memory for a single run:
 

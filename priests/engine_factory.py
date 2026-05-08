@@ -20,7 +20,7 @@ _PRIESTS_MD_DEFAULT = """\
 
 You are running inside the priests AI dispatch system.
 Your profile (PROFILE.md, RULES.md, CUSTOM.md) defines your identity and role.
-Your memory files (user.md, notes.md, auto_short.md) carry persistent facts across sessions.
+Your memory files (user.md, preferences.md, auto_short.md) carry approved facts across sessions.
 
 Memory instructions for each session are provided dynamically in the system context.
 """
@@ -41,6 +41,10 @@ def _bootstrap_profiles(profiles_root: Path) -> None:
     if not profile_toml.exists():
         profile_toml.write_text("memories = true\n")
 
+    # Ensure new memory files exist for upgraded installs without overwriting
+    # legacy notes.md or user-edited memory files.
+    _scaffold_memories(default_dir / "memories")
+
     # Always overwrite PRIESTS.md to keep it current across upgrades.
     guide_path = profiles_root.parent / _PRIESTS_MD
     guide_path.write_text(_PRIESTS_MD_DEFAULT)
@@ -49,9 +53,15 @@ def _bootstrap_profiles(profiles_root: Path) -> None:
 def _scaffold_memories(memories_dir: Path) -> None:
     """Create the standard memory file stubs in a profile's memories directory."""
     memories_dir.mkdir(parents=True, exist_ok=True)
-    (memories_dir / "user.md").write_text("# User\n\n")
-    (memories_dir / "notes.md").write_text("# Notes\n\n")
-    (memories_dir / "auto_short.md").write_text("# Short Memories\n\n")
+    for fname, content in (
+        ("user.md", "# User\n\n"),
+        ("preferences.md", "# Preferences\n\n"),
+        ("auto_short.md", "# Short Memories\n\n"),
+    ):
+        path = memories_dir / fname
+        if not path.exists():
+            path.write_text(content, encoding="utf-8")
+    (memories_dir / "pending").mkdir(exist_ok=True)
 
 
 def load_global_guide(config: AppConfig) -> str | None:
@@ -133,7 +143,7 @@ async def build_engine(config: AppConfig) -> tuple[PriestEngine, SqliteSessionSt
     # Bootstrap profiles_root and default profile on first run
     _bootstrap_profiles(profiles_root)
 
-    profile_loader = FilesystemProfileLoader(profiles_root=profiles_root)
+    profile_loader = FilesystemProfileLoader(profiles_root=profiles_root, include_memories=False)
     store = SqliteSessionStore(db_path=sessions_db)
 
     engine = PriestEngine(
