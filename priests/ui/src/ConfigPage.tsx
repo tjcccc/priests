@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import {
   fetchConfig, patchConfig, fetchModels, fetchProfiles, fetchProfileFiles,
   putProfileFiles, createProfile, renameProfile, deleteProfile, putModelOptions, fetchProviderModels,
-  ConfigData, ProviderRegistryItem, ModelsConfig, ProfileFiles,
+  startGitHubCopilotDeviceFlow, pollGitHubCopilotDeviceFlow,
+  ConfigData, ProviderRegistryItem, ModelsConfig, ProfileFiles, ProviderConfigData,
 } from './api'
 
 // ---------------------------------------------------------------------------
@@ -223,11 +224,12 @@ interface ProviderCardProps {
   name: string; info: ProviderRegistryItem
   baseUrl: string; apiKey: string; useProxy: boolean
   onChange: (field: 'base_url' | 'api_key' | 'use_proxy', value: string | boolean) => void
+  onAuthorized?: () => void
 }
 
 const OAUTH_NOTES: Record<string, { hint: string; link?: string }> = {
   github_copilot: {
-    hint: 'Requires a GitHub Personal Access Token with Copilot scope, or complete the device-flow at:',
+    hint: 'Use Authorize to generate a one-time GitHub device code, or paste a supported GitHub/Copilot token manually.',
     link: 'https://github.com/login/device',
   },
   chatgpt: {
@@ -236,7 +238,15 @@ const OAUTH_NOTES: Record<string, { hint: string; link?: string }> = {
   },
 }
 
-function ProviderCard({ name, info, baseUrl, apiKey, useProxy, onChange }: ProviderCardProps) {
+function ProviderCard({ name, info, baseUrl, apiKey, useProxy, onChange, onAuthorized }: ProviderCardProps) {
+  const [deviceAuth, setDeviceAuth] = useState<{
+    status: 'idle' | 'starting' | 'waiting' | 'authorized' | 'error'
+    userCode?: string
+    verificationUri?: string
+    expiresAt?: number
+    error?: string
+  }>({ status: 'idle' })
+
   const typeBadge = info.provider_type === 'local'
     ? 'bg-[#34C759]/10 text-[#34C759]'
     : info.provider_type === 'oauth'
@@ -244,6 +254,44 @@ function ProviderCard({ name, info, baseUrl, apiKey, useProxy, onChange }: Provi
     : 'bg-[#007AFF]/10 text-[#007AFF]'
 
   const oauthNote = info.provider_type === 'oauth' ? OAUTH_NOTES[name] : null
+
+  const startCopilotAuth = async () => {
+    setDeviceAuth({ status: 'starting' })
+    try {
+      const started = await startGitHubCopilotDeviceFlow()
+      const expiresAt = Date.now() + started.expires_in * 1000
+      setDeviceAuth({
+        status: 'waiting',
+        userCode: started.user_code,
+        verificationUri: started.verification_uri,
+        expiresAt,
+      })
+      const poll = async () => {
+        const result = await pollGitHubCopilotDeviceFlow(started.device_code)
+        if (result.status === 'authorized') {
+          setDeviceAuth({
+            status: 'authorized',
+            userCode: started.user_code,
+            verificationUri: started.verification_uri,
+          })
+          onAuthorized?.()
+          return
+        }
+        if (result.status === 'authorization_pending' || result.status === 'slow_down') {
+          if (Date.now() > expiresAt) {
+            setDeviceAuth({ status: 'error', error: 'The device code expired. Start again.' })
+            return
+          }
+          window.setTimeout(poll, (started.interval + (result.status === 'slow_down' ? 5 : 0)) * 1000)
+          return
+        }
+        setDeviceAuth({ status: 'error', error: result.message || result.status })
+      }
+      window.setTimeout(poll, started.interval * 1000)
+    } catch (e) {
+      setDeviceAuth({ status: 'error', error: String(e) })
+    }
+  }
 
   return (
     <div className="border border-black/[0.07] rounded-xl p-4 space-y-3">
@@ -261,6 +309,38 @@ function ProviderCard({ name, info, baseUrl, apiKey, useProxy, onChange }: Provi
               className="text-[12px] text-[#007AFF] hover:underline font-mono">
               {oauthNote.link}
             </a>
+          )}
+        </div>
+      )}
+      {name === 'github_copilot' && (
+        <div className="border border-black/[0.06] rounded-lg px-3 py-2 space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[12px] text-black/50">Device authorization</span>
+            <button
+              onClick={startCopilotAuth}
+              disabled={deviceAuth.status === 'starting' || deviceAuth.status === 'waiting'}
+              className="px-3 py-1.5 bg-[#AF52DE] hover:bg-[#9445C4] disabled:bg-black/20 disabled:cursor-not-allowed cursor-pointer text-white rounded-lg text-[12px] font-medium transition-colors"
+            >
+              {deviceAuth.status === 'waiting' ? 'Waiting…' : 'Authorize'}
+            </button>
+          </div>
+          {(deviceAuth.status === 'waiting' || deviceAuth.status === 'authorized') && (
+            <div className="space-y-1">
+              <div className="text-[11px] text-black/40">Enter this code on GitHub:</div>
+              <div className="font-mono text-[18px] font-semibold tracking-widest text-black">{deviceAuth.userCode}</div>
+              {deviceAuth.verificationUri && (
+                <a href={deviceAuth.verificationUri} target="_blank" rel="noreferrer"
+                  className="text-[12px] text-[#007AFF] hover:underline font-mono">
+                  {deviceAuth.verificationUri}
+                </a>
+              )}
+              {deviceAuth.status === 'authorized' && (
+                <div className="text-[12px] text-[#34C759] font-medium">Authorized and saved.</div>
+              )}
+            </div>
+          )}
+          {deviceAuth.status === 'error' && (
+            <div className="text-[12px] text-red-500">{deviceAuth.error}</div>
           )}
         </div>
       )}
@@ -290,8 +370,8 @@ function ProviderCard({ name, info, baseUrl, apiKey, useProxy, onChange }: Provi
 // Model Configuration section
 // ---------------------------------------------------------------------------
 
-function ModelConfigSection({ modelsConfig, registry }: {
-  modelsConfig: ModelsConfig; registry: ProviderRegistryItem[]
+function ModelConfigSection({ modelsConfig, registry, providers }: {
+  modelsConfig: ModelsConfig; registry: ProviderRegistryItem[]; providers: Record<string, ProviderConfigData>
 }) {
   const [rows, setRows] = useState<ModelRow[]>(() =>
     (modelsConfig.configured_options ?? []).map(o => ({ provider: o.provider, model: o.model }))
@@ -307,6 +387,10 @@ function ModelConfigSection({ modelsConfig, registry }: {
   const [addModel, setAddModel] = useState('')
 
   const selectedInfo = registry.find(r => r.name === addProvider) ?? null
+  const selectedProviderConfigured = selectedInfo?.needs_api_key
+    ? providers[addProvider]?.api_key === '••••••'
+    : true
+  const selectedProviderNeedsAuth = Boolean(selectedInfo?.needs_api_key && !selectedProviderConfigured)
 
   const providerDot = (name: string) => {
     const t = registry.find(r => r.name === name)?.provider_type
@@ -315,7 +399,7 @@ function ModelConfigSection({ modelsConfig, registry }: {
 
   const addRow = () => {
     const model = addModel.trim()
-    if (!model) return
+    if (!model || selectedProviderNeedsAuth) return
     setRows(r => [...r, { provider: addProvider, model }])
     setAddModel('')
     setState({ status: 'idle' })
@@ -381,11 +465,25 @@ function ModelConfigSection({ modelsConfig, registry }: {
             )}
           </div>
 
-          <button onClick={addRow} disabled={!addModel.trim()}
+          <button onClick={addRow} disabled={!addModel.trim() || selectedProviderNeedsAuth}
             className="px-4 py-1.5 bg-[#007AFF] hover:bg-[#0051D5] disabled:bg-black/20 disabled:cursor-not-allowed cursor-pointer text-white rounded-lg text-[13px] font-medium transition-colors shrink-0">
             Add
           </button>
         </div>
+
+        {selectedProviderNeedsAuth && selectedInfo && (
+          <div className="mx-4 mt-3 px-3 py-2 bg-[#AF52DE]/[0.06] border border-[#AF52DE]/20 rounded-lg flex items-center justify-between gap-3">
+            <span className="text-[12px] text-black/60">
+              {selectedInfo.label} needs a token before models can be added.
+            </span>
+            <button
+              onClick={() => scrollTo('providers')}
+              className="px-3 py-1.5 bg-white border border-black/[0.08] hover:bg-black/[0.03] cursor-pointer rounded-lg text-[12px] text-black/70 font-medium transition-colors shrink-0"
+            >
+              Open Providers
+            </button>
+          </div>
+        )}
 
         {rows.length === 0 ? (
           <div className="px-4 py-6 text-[13px] text-black/30 text-center">
@@ -799,10 +897,22 @@ export default function ConfigPage() {
       }
       if (Object.keys(updates).length === 0) { setProvidersState({ status: 'idle' }); return }
       await patchConfig(updates)
+      await refreshConfig()
       setProvidersState({ status: 'saved' })
     } catch (e) {
       setProvidersState({ status: 'error', error: String(e) })
     }
+  }
+
+  const refreshConfig = async () => {
+    const fresh = await fetchConfig()
+    setConfig(fresh)
+    const drafts: typeof providerDrafts = {}
+    for (const name of Object.keys(fresh.providers)) {
+      const p = fresh.providers[name]
+      drafts[name] = { base_url: p.base_url, api_key: p.api_key === '••••••' ? '' : p.api_key, use_proxy: p.use_proxy }
+    }
+    setProviderDrafts(drafts)
   }
 
   const saveMemory = async () => {
@@ -990,7 +1100,7 @@ export default function ConfigPage() {
                 />
 
                 {/* ── MODEL CONFIGURATION ───────────────────────────── */}
-                <ModelConfigSection modelsConfig={modelsConfig} registry={config.registry} />
+                <ModelConfigSection modelsConfig={modelsConfig} registry={config.registry} providers={config.providers} />
 
                 {/* ── PROVIDERS ─────────────────────────────────────── */}
                 <section id="providers">
@@ -1002,7 +1112,8 @@ export default function ConfigPage() {
                         return (
                           <ProviderCard key={info.name} name={info.name} info={info}
                             baseUrl={draft.base_url} apiKey={draft.api_key} useProxy={draft.use_proxy}
-                            onChange={(field, value) => updateProvider(info.name, field, value)} />
+                            onChange={(field, value) => updateProvider(info.name, field, value)}
+                            onAuthorized={refreshConfig} />
                         )
                       })}
                     </div>

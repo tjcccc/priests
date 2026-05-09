@@ -43,6 +43,14 @@ REGISTRY: dict[str, ProviderInfo] = {
         known_models=None,  # fetched dynamically from /v1/models
         provider_type="local",
     ),
+    "rapidmlx": ProviderInfo(
+        name="rapidmlx",
+        label="Rapid-MLX (local)",
+        needs_api_key=False,
+        default_base_url="http://localhost:8000/v1",
+        known_models=None,  # fetched dynamically from /v1/models
+        provider_type="local",
+    ),
     # ── API ────────────────────────────────────────────────────────────────
     "openai": ProviderInfo(
         name="openai",
@@ -209,7 +217,16 @@ REGISTRY: dict[str, ProviderInfo] = {
         needs_api_key=True,  # GitHub PAT or device-flow OAuth token
         default_base_url="https://api.githubcopilot.com",
         known_models=[
-            "gpt-4o", "gpt-4.1", "claude-3.5-sonnet", "gemini-2.0-flash", "o3-mini",
+            "gpt-5.5",
+            "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano",
+            "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.2",
+            "gpt-5-mini", "gpt-4.1",
+            "claude-sonnet-4.6", "claude-sonnet-4.5",
+            "claude-opus-4.7", "claude-opus-4.6", "claude-opus-4.6-fast",
+            "claude-opus-4.5", "claude-haiku-4.5",
+            "gemini-3.1-pro", "gemini-3-flash", "gemini-2.5-pro",
+            "grok-code-fast-1",
+            "raptor-mini", "goldeneye",
         ],
         provider_type="oauth",
     ),
@@ -219,8 +236,11 @@ REGISTRY: dict[str, ProviderInfo] = {
         needs_api_key=True,  # OpenAI OAuth app token or API key from platform.openai.com
         default_base_url="https://api.openai.com/v1",
         known_models=[
-            "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini",
-            "o4-mini", "o3",
+            "gpt-5.5",
+            "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano",
+            "gpt-5.2", "gpt-5-mini", "gpt-5-nano",
+            "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+            "gpt-4o", "gpt-4o-mini",
         ],
         provider_type="oauth",
     ),

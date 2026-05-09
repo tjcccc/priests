@@ -185,6 +185,77 @@ def test_run_explicit_model_overrides_profile_model(client, tmp_path):
     assert call_request.config.model == "gpt-4.1"
 
 
+def test_run_unconfigured_provider_returns_actionable_error(client):
+    c, engine, _ = client
+    engine._adapters = {"ollama": object()}
+
+    resp = c.post("/v1/run", json={
+        "prompt": "hi",
+        "provider": "github_copilot",
+        "model": "gpt-5-mini",
+    })
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["code"] == "PROVIDER_NOT_CONFIGURED"
+    assert "Configuration > Providers" in detail["message"]
+
+
+def test_run_stream_unconfigured_provider_returns_actionable_error(client):
+    c, engine, _ = client
+    engine._adapters = {"ollama": object()}
+
+    resp = c.post("/v1/run/stream", json={
+        "prompt": "hi",
+        "provider": "github_copilot",
+        "model": "gpt-5-mini",
+    })
+
+    assert resp.status_code == 200
+    assert "PROVIDER_NOT_CONFIGURED" in resp.text
+    assert "Configuration > Providers" in resp.text
+
+
+def test_run_refreshes_expired_github_copilot_token(client):
+    from priests.config.model import OpenAICompatConfig
+    from priests.providers.github_copilot_auth import GitHubCopilotToken
+
+    c, engine, _ = client
+    config = c.app.state.config
+    config.providers.github_copilot = OpenAICompatConfig(
+        api_key="tid=old",
+        base_url="https://api.githubcopilot.com",
+        oauth_token="gho-refresh",
+        api_key_expires_at=1,
+    )
+    engine._adapters = {"github_copilot": object()}
+    engine.run.return_value = _ok_response("refreshed")
+
+    refreshed = GitHubCopilotToken(
+        token="tid=new",
+        base_url="https://api.githubcopilot.com",
+        expires_at=1893456000,
+    )
+    with patch("priests.service.routes.run.load_config", return_value=config), \
+         patch("priests.service.routes.run.save_config") as save, \
+         patch(
+             "priests.service.routes.run.exchange_github_token_for_copilot_token",
+             new=AsyncMock(return_value=refreshed),
+         ) as exchange:
+        resp = c.post("/v1/run", json={
+            "prompt": "hi",
+            "provider": "github_copilot",
+            "model": "gpt-5-mini",
+        })
+
+    assert resp.status_code == 200
+    exchange.assert_awaited_once_with("gho-refresh")
+    assert c.app.state.config.providers.github_copilot.api_key == "tid=new"
+    assert c.app.state.config.providers.github_copilot.oauth_token == "gho-refresh"
+    assert c.app.state.config.providers.github_copilot.api_key_expires_at == 1893456000
+    save.assert_called_once()
+
+
 def test_run_assembles_profile_memory_into_request_memory(client, tmp_path):
     c, engine, _ = client
     profile_dir = tmp_path / "coder"

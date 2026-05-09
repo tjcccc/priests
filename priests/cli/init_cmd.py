@@ -44,6 +44,24 @@ def _fetch_ollama_models(base_url: str) -> list[str] | None:
         return None
 
 
+def _openai_models_url(base_url: str) -> str:
+    """Return the /models URL for an OpenAI-compatible provider base URL."""
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/v1"):
+        return f"{normalized}/models"
+    return f"{normalized}/v1/models"
+
+
+def _fetch_openai_compat_models(base_url: str) -> list[str] | None:
+    """Return sorted model IDs from an OpenAI-compatible /v1/models endpoint."""
+    try:
+        r = httpx.get(_openai_models_url(base_url), timeout=5.0)
+        r.raise_for_status()
+        return sorted(m["id"] for m in r.json().get("data", []) if "id" in m)
+    except Exception:
+        return None
+
+
 def _select_ollama_model(default_url: str) -> tuple[str, str]:
     """Return (model_name, confirmed_base_url). Retries on bad URL."""
     base_url = default_url
@@ -61,6 +79,31 @@ def _select_ollama_model(default_url: str) -> tuple[str, str]:
             console.print("[yellow]No local models found.[/yellow] Make sure you have pulled at least one model.")
             console.print("  e.g. [bold]ollama pull qwen3:8b[/bold]\n")
             model = typer.prompt("Or enter a model name manually").strip()
+            return model, base_url
+
+        model = _arrow_select(
+            "Select model:",
+            [questionary.Choice(title=m) for m in models],
+        )
+        return model, base_url
+
+
+def _select_openai_compat_local_model(provider_label: str, default_url: str) -> tuple[str, str]:
+    """Return (model_name, confirmed_base_url) for a no-key local OpenAI-compatible server."""
+    base_url = default_url
+
+    while True:
+        console.print(f"[dim]Connecting to {provider_label} at {base_url} ...[/dim]")
+        models = _fetch_openai_compat_models(base_url)
+
+        if models is None:
+            err_console.print(f"[red]Could not connect to {provider_label} at {base_url}[/red]")
+            base_url = typer.prompt(f"Enter {provider_label} base URL").strip().rstrip("/")
+            continue
+
+        if not models:
+            console.print("[yellow]No local models found.[/yellow]")
+            model = typer.prompt("Enter a model name manually").strip()
             return model, base_url
 
         model = _arrow_select(
@@ -104,12 +147,16 @@ def _apply_provider_to_config(
     custom_base_url: str,
 ) -> None:
     """Write api_key (and base_url for custom) into the providers config in-place."""
+    info = get_provider(provider)
     if provider == "anthropic":
         providers.anthropic = AnthropicConfig(api_key=api_key)
     elif provider == "custom":
         providers.custom = OpenAICompatConfig(api_key=api_key, base_url=custom_base_url)
+    elif info and info.provider_type == "local":
+        current = getattr(providers, provider, None)
+        base_url = current.base_url if current else info.default_base_url
+        setattr(providers, provider, OllamaConfig(base_url=base_url))
     elif provider != "ollama":
-        info = get_provider(provider)
         base_url = info.default_base_url if info else ""
         setattr(providers, provider, OpenAICompatConfig(api_key=api_key, base_url=base_url))
 
@@ -139,12 +186,16 @@ def init_command(
     info = next(p for p in providers_list if p.name == provider_name)
 
     # --- API key + model ---
-    ollama_base_url = "http://localhost:11434"
+    local_base_url = ""
     api_key = ""
     custom_base_url = ""
 
     if provider_name == "ollama":
-        model, ollama_base_url = _select_ollama_model(ollama_base_url)
+        local_base_url = "http://localhost:11434"
+        model, local_base_url = _select_ollama_model(local_base_url)
+    elif info.provider_type == "local" and info.known_models is None:
+        local_base_url = info.default_base_url
+        model, local_base_url = _select_openai_compat_local_model(info.label, local_base_url)
     else:
         if provider_name == "custom":
             custom_base_url = typer.prompt("Base URL (e.g. https://my-server/v1)").strip().rstrip("/")
@@ -162,7 +213,11 @@ def init_command(
     sessions_db_str = typer.prompt("Sessions database", default=default_sessions_db)
 
     # --- Build and save config ---
-    providers = ProvidersConfig(ollama=OllamaConfig(base_url=ollama_base_url))
+    providers = ProvidersConfig()
+    if provider_name == "ollama":
+        providers.ollama = OllamaConfig(base_url=local_base_url)
+    elif info.provider_type == "local" and local_base_url:
+        setattr(providers, provider_name, OllamaConfig(base_url=local_base_url))
     _apply_provider_to_config(providers, provider_name, api_key, custom_base_url)
 
     config = AppConfig(

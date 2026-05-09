@@ -11,6 +11,7 @@ from priest.providers.openai_compat_provider import OpenAICompatProvider
 from priest.session.sqlite_store import SqliteSessionStore
 
 from priests.config.model import AppConfig
+from priests.providers.github_copilot_provider import GitHubCopilotProvider
 
 
 _PRIESTS_MD = "PRIESTS.md"
@@ -90,6 +91,7 @@ def build_adapters(config: AppConfig) -> dict:
         "ollama": OllamaProvider(base_url=p.ollama.base_url),
         "llamacpp": OpenAICompatProvider("llamacpp", p.llamacpp.base_url, "", proxy=None),
         "lmstudio": OpenAICompatProvider("lmstudio", p.lmstudio.base_url, "", proxy=None),
+        "rapidmlx": OpenAICompatProvider("rapidmlx", p.rapidmlx.base_url, "", proxy=None),
     }
 
     _compat = [
@@ -113,7 +115,10 @@ def build_adapters(config: AppConfig) -> dict:
     for name, cfg in _compat:
         if cfg and cfg.base_url:
             proxy = proxy_url if (cfg.use_proxy and proxy_url) else None
-            adapters[name] = OpenAICompatProvider(name, cfg.base_url, cfg.api_key, proxy=proxy)
+            if name == "github_copilot":
+                adapters[name] = GitHubCopilotProvider(cfg.base_url, cfg.api_key, proxy=proxy)
+            else:
+                adapters[name] = OpenAICompatProvider(name, cfg.base_url, cfg.api_key, proxy=proxy)
 
     if p.anthropic and p.anthropic.api_key:
         proxy = proxy_url if (p.anthropic.use_proxy and proxy_url) else None

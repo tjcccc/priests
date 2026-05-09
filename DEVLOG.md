@@ -1,5 +1,21 @@
 # DEVLOG
 
+## 2026-05-09 — v0.20.0 — Rapid-MLX provider and OAuth fixes
+
+- Added local no-key provider `rapidmlx` (`http://localhost:8000/v1`)
+- Local OpenAI-compatible providers now fetch dynamic model lists from `/v1/models` while Ollama keeps using `/api/tags`
+- `priests provider list`, `priests provider <name> list`, `priests init`, `priests model add`, config API, and the config UI registry expose Rapid-MLX alongside the existing `llamacpp` provider
+- Default service port changed to `9000`; README service URLs and config examples now match
+- GitHub Copilot and ChatGPT OAuth provider fallbacks now include current frontier models; configured OAuth providers try live `/models` discovery before falling back
+- Config UI now blocks adding OAuth model rows until a token is saved and links directly to the Providers section
+- Service run/stream routes now return `PROVIDER_NOT_CONFIGURED` with setup guidance when an OAuth/API provider has no registered adapter
+- Model option saves now reject unknown provider keys to catch typos such as `github_copilit/...`
+- GitHub Copilot provider card now has an Authorize button that generates and displays a GitHub device-flow user code, polls for authorization, exchanges the GitHub token for a Copilot API token, saves it, and hot-reloads adapters
+- GitHub Copilot chat calls now use a Copilot-specific adapter that sends the required IDE auth headers, including `Editor-Version`
+- GitHub Copilot OAuth now stores the GitHub device token separately and refreshes the short-lived Copilot IDE token before chat requests expire
+
+---
+
 ## 2026-05-08 — v0.19.0 — app-owned chat memory policy
 
 - `priests` now owns chat memory semantics instead of re-exporting `priest.memory`

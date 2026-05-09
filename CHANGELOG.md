@@ -2,6 +2,25 @@
 
 All notable changes to `priests` are documented here.
 
+## [0.20.0] — 2026-05-09
+
+### Added
+- Local provider: `rapidmlx` (`http://localhost:8000/v1`)
+
+### Changed
+- Default service port is now `9000`
+- OAuth provider model lists now include current GitHub Copilot and OpenAI frontier models, and configured OAuth providers try live `/models` discovery before using curated fallbacks
+
+### Fixed
+- Local OpenAI-compatible model discovery now queries `/v1/models`; Ollama model discovery still uses `/api/tags`
+- OAuth models can no longer be added from the config UI until their provider token is saved; unconfigured OAuth providers now return a clear setup error instead of `Provider ... is not registered`
+- Model option saves now reject unknown provider keys such as mistyped `github_copilit/...`
+- GitHub Copilot provider authorization now starts the device flow from the app, displays the one-time code, polls GitHub, exchanges the OAuth token for a Copilot API token, saves it, and hot-reloads adapters
+- GitHub Copilot chat requests now send the required IDE auth headers, including `Editor-Version`
+- GitHub Copilot OAuth now refreshes expired short-lived IDE tokens automatically after re-authorizing once
+
+---
+
 ## [0.19.0] — 2026-05-08
 
 ### Added

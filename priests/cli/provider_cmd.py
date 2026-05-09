@@ -8,7 +8,7 @@ from typer.core import TyperGroup
 from rich.console import Console
 from rich.table import Table
 
-from priests.cli.init_cmd import _fetch_ollama_models
+from priests.cli.init_cmd import _fetch_ollama_models, _fetch_openai_compat_models
 from priests.config.loader import load_config
 from priests.registry import get_provider, list_providers
 
@@ -59,7 +59,7 @@ def provider_list(
     table.add_column("Configured", justify="center", min_width=12)
 
     for info in list_providers():
-        if info.name == "ollama":
+        if info.provider_type == "local":
             configured = "[green]local[/green]"
         else:
             cfg = getattr(config.providers, info.name, None)
@@ -86,16 +86,19 @@ def provider_models(
     console.print(f"[bold]{info.name}[/bold]  —  {info.label}\n")
 
     if info.known_models is None:
-        # Ollama: fetch dynamically
+        # Local providers: fetch dynamically.
         config = load_config(config_file)
-        base_url = config.providers.ollama.base_url
+        cfg = getattr(config.providers, name)
+        base_url = cfg.base_url
         console.print(f"[dim]Fetching models from {base_url} ...[/dim]")
-        models = _fetch_ollama_models(base_url)
+        models = _fetch_ollama_models(base_url) if name == "ollama" else _fetch_openai_compat_models(base_url)
         if models is None:
-            err_console.print(f"[red]Could not connect to Ollama at {base_url}[/red]")
+            err_console.print(f"[red]Could not connect to {info.label} at {base_url}[/red]")
             raise typer.Exit(1)
         if not models:
-            console.print("[yellow]No models found.[/yellow] Pull one with [bold]ollama pull <model>[/bold].")
+            console.print("[yellow]No models found.[/yellow]")
+            if name == "ollama":
+                console.print("Pull one with [bold]ollama pull <model>[/bold].")
             return
         for m in models:
             console.print(f"  {m}")

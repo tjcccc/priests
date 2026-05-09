@@ -36,7 +36,7 @@ class PathsConfig(BaseModel):
 
 class ServiceConfig(BaseModel):
     host: str = "127.0.0.1"
-    port: int = 8777
+    port: int = 9000
 
 
 class OllamaConfig(BaseModel):
@@ -47,6 +47,8 @@ class OpenAICompatConfig(BaseModel):
     api_key: str = ""
     base_url: str = ""
     use_proxy: bool = False
+    oauth_token: str = ""
+    api_key_expires_at: int | None = None
 
 
 class AnthropicConfig(BaseModel):
@@ -65,6 +67,7 @@ class ProvidersConfig(BaseModel):
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     llamacpp: OllamaConfig = Field(default_factory=lambda: OllamaConfig(base_url="http://localhost:8080"))
     lmstudio: OllamaConfig = Field(default_factory=lambda: OllamaConfig(base_url="http://localhost:1234/v1"))
+    rapidmlx: OllamaConfig = Field(default_factory=lambda: OllamaConfig(base_url="http://localhost:8000/v1"))
     openai: OpenAICompatConfig | None = None
     anthropic: AnthropicConfig | None = None
     gemini: OpenAICompatConfig | None = None

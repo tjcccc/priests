@@ -16,6 +16,7 @@ except ImportError:
 from priests.cli.init_cmd import (
     _apply_provider_to_config,
     _arrow_select,
+    _select_openai_compat_local_model,
     _register_model,
     _select_model,
     _select_ollama_model,
@@ -185,6 +186,12 @@ def _run_add_flow(config, config_file) -> tuple[str, str]:
         current_url = config.providers.ollama.base_url
         model, ollama_base_url = _select_ollama_model(current_url)
         config.providers.ollama.base_url = ollama_base_url
+        api_key = ""
+        custom_base_url = ""
+    elif info.provider_type == "local" and info.known_models is None:
+        current_cfg = getattr(config.providers, provider_name)
+        model, base_url = _select_openai_compat_local_model(info.label, current_cfg.base_url)
+        current_cfg.base_url = base_url
         api_key = ""
         custom_base_url = ""
     else:

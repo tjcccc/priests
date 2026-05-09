@@ -40,7 +40,7 @@ uv run priests init
 uv run priests service start
 ```
 
-Open `http://localhost:8777/ui`.
+Open `http://localhost:9000/ui`.
 
 When changing UI assets:
 
@@ -121,6 +121,7 @@ Ctrl+J inserts a newline. Enter submits.
 | `ollama` | Ollama | Local | Local |
 | `llamacpp` | llama.cpp | Local | Local |
 | `lmstudio` | LM Studio | Local | Local |
+| `rapidmlx` | Rapid-MLX | Local | Local |
 | `openai` | OpenAI | API | International |
 | `anthropic` | Anthropic Claude | API | International |
 | `gemini` | Google Gemini | API | International |
@@ -139,7 +140,9 @@ Ctrl+J inserts a newline. Enter submits.
 | `chatgpt` | ChatGPT (OpenAI OAuth) | OAuth | International |
 | `custom` | Custom OpenAI-compatible endpoint | API | Any |
 
-Local providers (Ollama, llama.cpp, LM Studio) require no API key and fetch available models automatically from the running server.
+Local providers (Ollama, llama.cpp, LM Studio, Rapid-MLX) require no API key and fetch available models automatically from the running server.
+
+GitHub Copilot OAuth uses the config UI device flow. After authorization, priests stores the GitHub device token and refreshes the short-lived Copilot IDE token before chat requests.
 
 ## Config file
 
@@ -164,13 +167,16 @@ sessions_db  = "~/.priests/sessions.db"
 
 [service]
 host = "127.0.0.1"
-port = 8777
+port = 9000
 
 [proxy]
 url = "http://127.0.0.1:7890"
 
 [providers.ollama]
 base_url = "http://localhost:11434"
+
+[providers.rapidmlx]
+base_url = "http://localhost:8000/v1"
 
 [providers.bailian]
 api_key = "sk-..."
@@ -291,7 +297,7 @@ To disable permanently for a profile, set `memories = false` in `profile.toml`.
 
 ## Web UI
 
-Start the service with `priests service start` and open `http://localhost:8777/ui`.
+Start the service with `priests service start` and open `http://localhost:9000/ui`.
 
 - **Chat**: streaming responses, markdown rendering, image attach (drag-and-drop or click), per-turn model and timing info
 - **Sessions**: sidebar with per-profile session lists; pin, rename, and delete sessions

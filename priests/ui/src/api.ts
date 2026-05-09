@@ -318,6 +318,42 @@ export async function patchConfig(updates: Record<string, string>): Promise<{ ne
   return r.json()
 }
 
+export interface GitHubCopilotDeviceStart {
+  device_code: string
+  user_code: string
+  verification_uri: string
+  expires_in: number
+  interval: number
+}
+
+export interface GitHubCopilotDevicePoll {
+  status: string
+  message: string
+  base_url: string
+}
+
+export async function startGitHubCopilotDeviceFlow(): Promise<GitHubCopilotDeviceStart> {
+  const r = await fetch('/v1/providers/github_copilot/device/start', { method: 'POST' })
+  if (!r.ok) {
+    const text = await r.text()
+    throw new Error(`GitHub Copilot auth start failed: ${text}`)
+  }
+  return r.json()
+}
+
+export async function pollGitHubCopilotDeviceFlow(deviceCode: string): Promise<GitHubCopilotDevicePoll> {
+  const r = await fetch('/v1/providers/github_copilot/device/poll', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_code: deviceCode }),
+  })
+  if (!r.ok) {
+    const text = await r.text()
+    throw new Error(`GitHub Copilot auth failed: ${text}`)
+  }
+  return r.json()
+}
+
 // ---------------------------------------------------------------------------
 // Streaming chat
 // ---------------------------------------------------------------------------

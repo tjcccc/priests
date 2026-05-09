@@ -138,7 +138,7 @@ def _do_start(
 def service_root(
     ctx: typer.Context,
     host: Annotated[str | None, typer.Option("--host", "-h", help="Bind host (default 127.0.0.1).")] = None,
-    port: Annotated[int | None, typer.Option("--port", "-p", help="Bind port (default 8777).")] = None,
+    port: Annotated[int | None, typer.Option("--port", "-p", help="Bind port (default 9000).")] = None,
     daemon: Annotated[bool, typer.Option("--daemon", "-d", help="Run as background daemon.")] = False,
     config_file: Annotated[Path | None, typer.Option("--config", help="Path to priests.toml.")] = None,
 ) -> None:
@@ -150,7 +150,7 @@ def service_root(
 @service_app.command("start")
 def service_start(
     host: Annotated[str | None, typer.Option("--host", "-h", help="Bind host (default 127.0.0.1).")] = None,
-    port: Annotated[int | None, typer.Option("--port", "-p", help="Bind port (default 8777).")] = None,
+    port: Annotated[int | None, typer.Option("--port", "-p", help="Bind port (default 9000).")] = None,
     daemon: Annotated[bool, typer.Option("--daemon", "-d", help="Run as background daemon.")] = False,
     config_file: Annotated[Path | None, typer.Option("--config", help="Path to priests.toml.")] = None,
 ) -> None:
