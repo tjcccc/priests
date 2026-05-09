@@ -45,7 +45,7 @@ memories = true
 # provider = "bailian"
 # model = "qwen-plus"
 
-# Override the global memory size limit for this profile (max characters in auto_short.md).
+# Override the global memory size limit for this profile (max characters in auto_short.jsonl).
 # Uncomment to override.
 # memories_limit = 50000
 """

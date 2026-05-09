@@ -11,6 +11,7 @@ from priests.memory.extractor import (
     append_memories,
     apply_memory_proposals,
     needs_consolidation,
+    save_memories,
     trim_memories,
 )
 
@@ -39,16 +40,18 @@ _STREAM_NO_TAGS = (
     "pytest-benchmark measures min, mean, max, and stddev per function. " * 100
 )
 
-# A proposal turn: model suggests durable memory for later approval
-_PROPOSAL_PAYLOAD = json.dumps(
+# A structured memory-save turn: model proposes durable memory for auto-save
+_SAVE_PAYLOAD = json.dumps(
     {
-        "user": "Uses Neovim on macOS.",
-        "preferences": "Prefers concise technical explanations.",
+        "memories": [
+            {"kind": "user", "text": "Uses Neovim on macOS.", "priority": 2},
+            {"kind": "preferences", "text": "Prefers concise technical explanations.", "priority": 2},
+        ]
     }
 )
-_STREAM_WITH_PROPOSAL = (
-    f"<memory_proposal>{_PROPOSAL_PAYLOAD}</memory_proposal>"
-    "I have prepared durable memory proposals for review. " * 20
+_STREAM_WITH_SAVE = (
+    f"<memory_save>{_SAVE_PAYLOAD}</memory_save>"
+    "I saved the useful durable memory. " * 20
 )
 
 
@@ -109,13 +112,13 @@ def test_bench_stripper_append_block(benchmark):
     benchmark(run)
 
 
-def test_bench_stripper_proposal_block(benchmark):
-    """<memory_proposal> block at front, 32-byte chunks."""
+def test_bench_stripper_save_block(benchmark):
+    """<memory_save> block at front, 32-byte chunks."""
 
     def run():
         s = StreamingStripper()
-        for i in range(0, len(_STREAM_WITH_PROPOSAL), 32):
-            s.feed(_STREAM_WITH_PROPOSAL[i : i + 32])
+        for i in range(0, len(_STREAM_WITH_SAVE), 32):
+            s.feed(_STREAM_WITH_SAVE[i : i + 32])
         s.flush()
 
     benchmark(run)
@@ -148,8 +151,8 @@ def test_bench_needs_consolidation_disabled(benchmark, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_bench_append_memories_auto_and_pending(benchmark, tmp_path):
-    """Append short-term memory and route durable fields to pending proposals."""
+def test_bench_append_memories_auto_and_durable(benchmark, tmp_path):
+    """Append short-term memory and auto-approved durable memory."""
     payload = {
         "user": "Prefers dark mode.",
         "preferences": "Prefers concise answers.",
@@ -165,12 +168,17 @@ def test_bench_append_memories_auto_short_only(benchmark, tmp_path):
 
 
 def test_bench_apply_memory_proposals(benchmark, tmp_path):
-    """Write one pending proposal Markdown file per durable memory target."""
+    """Auto-approve durable memory proposals into memory files."""
     proposals = {
         "user": "Uses Neovim on macOS.",
         "preferences": "Prefers concise technical explanations.",
     }
     benchmark(apply_memory_proposals, tmp_path, proposals)
+
+
+def test_bench_save_memories(benchmark, tmp_path):
+    """Save structured JSONL memory entries."""
+    benchmark(save_memories, tmp_path, json.loads(_SAVE_PAYLOAD))
 
 
 # ---------------------------------------------------------------------------

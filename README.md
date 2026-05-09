@@ -107,9 +107,9 @@ Inside `priests run` interactive mode:
 | `/think off` | Disable thinking mode |
 | `/new` | Start a new session |
 | `/search <query>` | Run a web search; results injected into your next message (requires `priests[search]`) |
-| `/remember <text>` | Save text directly to today's short memory (`auto_short.md`) |
-| `/remember user <text>` | Save approved durable user memory (`user.md`) |
-| `/remember pref <text>` | Save approved durable preference memory (`preferences.md`) |
+| `/remember <text>` | Save text directly to short-term memory (`auto_short.jsonl`) |
+| `/remember user <text>` | Save approved durable user memory (`user.jsonl`) |
+| `/remember pref <text>` | Save approved durable preference memory (`preferences.jsonl`) |
 | `/exit` | Exit the chat |
 
 Ctrl+J inserts a newline. Enter submits.
@@ -189,7 +189,7 @@ base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
 use_proxy = true
 
 [memory]
-size_limit = 50000  # max characters in auto_short.md; 0 = unlimited
+size_limit = 50000  # max characters in auto_short.jsonl; 0 = unlimited
 ```
 
 ### Proxy
@@ -215,10 +215,12 @@ profiles/
     CUSTOM.md       # user customization
     profile.toml    # per-profile settings (memories on/off)
     memories/       # persistent memory files assembled by priests
-      user.md           # stable facts about the user (permanent)
-      preferences.md    # approved user preferences (permanent)
-      auto_short.md     # time-sensitive observations, tasks, reminders (rolling)
-      pending/          # durable memory proposals awaiting approval
+      user.jsonl           # stable facts about the user
+      preferences.jsonl    # approved user preferences
+      auto_short.jsonl     # time-sensitive observations, tasks, reminders
+      user.md              # legacy read-only fallback
+      preferences.md       # legacy read-only fallback
+      auto_short.md        # legacy read-only fallback
 ```
 
 Create a new profile:
@@ -261,7 +263,7 @@ memories = true
 
 ## Memory system
 
-priests owns the chat-app memory policy and passes assembled memory to `priest` through the special request `memory` lane. The core `priest` framework remains generic; it does not decide what `user.md`, `preferences.md`, or `auto_short.md` mean.
+priests owns the chat-app memory policy and passes assembled memory to `priest` through the special request `memory` lane. The core `priest` framework remains generic; it does not decide what `user.jsonl`, `preferences.jsonl`, or `auto_short.jsonl` mean.
 
 Profile files and memory files have different authority:
 
@@ -270,22 +272,31 @@ Profile files and memory files have different authority:
 | `PROFILE.md` | Assistant identity/persona |
 | `RULES.md` | Human-authored hard behavior rules |
 | `CUSTOM.md` | Human-authored profile setup/context |
-| `memories/user.md` | Approved stable facts about the user |
-| `memories/preferences.md` | Approved stable user preferences, lower priority than profile docs |
-| `memories/auto_short.md` | Time-sensitive observations, tasks, reminders — rolling, trimmed by `size_limit` |
-| `memories/pending/*.md` | Durable memory proposals awaiting user approval |
+| `memories/user.jsonl` | Approved stable facts about the user |
+| `memories/preferences.jsonl` | Approved stable user preferences, lower priority than profile docs |
+| `memories/auto_short.jsonl` | Time-sensitive observations, tasks, reminders, current-session context |
+| `memories/*.md` | Legacy read-only fallback memory files |
 
 Legacy `memories/notes.md` is still read if present, but priests treats it as read-only legacy memory and no longer writes to it automatically.
 
-Model-generated memory is intentionally conservative:
+Each JSONL memory entry stores text plus metadata such as `priority`, `confidence`, `stability`, `source`, timestamps, and supersession status. Priority `0` is highest and is reserved for rare, stable facts such as the user's name.
 
 | Policy | Behavior |
 |--------|----------|
-| Auto-applied | Only short-term `auto_short` entries |
-| Proposed | Durable `user` / `preferences` entries, saved under `pending/` |
+| Auto-applied short-term | Structured `auto_short` entries |
+| Auto-applied durable | Structured `user` / `preferences` entries |
+| Recall budget | Normal mode recalls priority `0..3`; thinking mode recalls priority `0..10`; `memory.context_limit` is the final hard budget |
 | Never auto-written | `PROFILE.md`, `RULES.md`, `CUSTOM.md`, `profile.toml`, legacy `notes.md` |
 
-`auto_short.md` uses dated sections (`## YYYY-MM-DD`). Oldest sections are dropped automatically once the file exceeds `memory.size_limit` characters.
+The model emits hidden `<memory_save>{...}</memory_save>` JSON blocks. priests strips those blocks from visible replies, validates the structured entries, deduplicates exact matches, supersedes simple conflicts such as corrected user names, and trims low-priority short-term entries once `auto_short.jsonl` exceeds `memory.size_limit`.
+
+Run the live memory eval against a local model:
+
+```bash
+uv run python scripts/memory_eval.py --provider ollama --model gemma4:e4b --keep --verbose
+```
+
+The eval creates a temporary profile/session, sends a fixed prompt sequence, checks both visible replies and JSONL memory state, and exits non-zero when any case fails.
 
 To disable memory for a single run:
 

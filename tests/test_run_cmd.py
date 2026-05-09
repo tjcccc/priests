@@ -14,17 +14,16 @@ from unittest.mock import MagicMock, patch
 def test_build_memory_context_returns_write_policy_not_memory_content(tmp_path):
     from priests.cli.run_cmd import _build_memory_context
 
-    (tmp_path / "user.md").write_text("user fact")
-    (tmp_path / "preferences.md").write_text("pref fact")
-    (tmp_path / "auto_short.md").write_text("# Short Memories\n\n## 2026-01-01\n\nauto fact\n")
+    (tmp_path / "user.md").write_text("unique-user-memory-fixture")
+    (tmp_path / "preferences.md").write_text("unique-pref-memory-fixture")
+    (tmp_path / "auto_short.md").write_text("# Short Memories\n\n## 2026-01-01\n\nunique-auto-memory-fixture\n")
 
     result = _build_memory_context(tmp_path, 50000, 0, False)
 
     assert "Memory policy for priests" in result
-    assert "memory_append" in result
-    assert "memory_proposal" in result
-    assert "user fact" not in result
-    assert "auto fact" not in result
+    assert "memory_save" in result
+    assert "unique-user-memory-fixture" not in result
+    assert "unique-auto-memory-fixture" not in result
 
 
 def test_assemble_memory_entries_holds_loaded_memory(tmp_path):
@@ -35,7 +34,7 @@ def test_assemble_memory_entries_holds_loaded_memory(tmp_path):
     (tmp_path / "notes.md").write_text("legacy fact")
     (tmp_path / "auto_short.md").write_text("# Short Memories\n\n## 2026-01-01\n\nauto fact\n")
 
-    entries = assemble_memory_entries(tmp_path)
+    entries = assemble_memory_entries(tmp_path, thinking=True)
 
     assert "user fact" in entries[0]
     assert "pref fact" in entries[1]
@@ -55,7 +54,7 @@ def test_assemble_memory_entries_context_limit(tmp_path):
 
     context_limit = 50 + 50 + 250
 
-    result = "\n".join(assemble_memory_entries(tmp_path, context_limit))
+    result = "\n".join(assemble_memory_entries(tmp_path, context_limit, thinking=True))
 
     assert "u" * 50 in result
     assert "p" * 50 in result

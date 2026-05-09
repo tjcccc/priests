@@ -2,6 +2,19 @@
 
 All notable changes to `priests` are documented here.
 
+## [0.21.0] — 2026-05-09
+
+### Changed
+- Memory is now saved automatically into structured JSONL files (`user.jsonl`, `preferences.jsonl`, `auto_short.jsonl`) with priority, confidence, stability, source, timestamps, and supersession metadata
+- The runtime now uses `<memory_save>{...}</memory_save>` blocks, strips them from visible replies, deduplicates exact memory, and supersedes simple conflicting name facts
+- Memory recall now uses priority cutoffs: normal mode includes priority `0..3`, thinking mode includes priority `0..10`, with `memory.context_limit` as the final prompt budget
+
+### Added
+- `scripts/memory_eval.py` runs a live memory evaluation against a real model using a temporary profile and checks both JSONL memory state and model replies
+
+### Fixed
+- Existing non-default profiles now receive missing JSONL memory stubs during startup, without overwriting existing memory files
+
 ## [0.20.0] — 2026-05-09
 
 ### Added

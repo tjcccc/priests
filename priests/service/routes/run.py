@@ -21,6 +21,7 @@ from priests.memory.extractor import (
     assemble_memory_entries,
     build_memory_instructions,
     clean_last_turn,
+    save_memories,
     trim_memories,
 )
 from priests.profile.config import load_profile_config, resolve_provider_model
@@ -35,6 +36,7 @@ from priests.service.schemas import RunRequest
 
 router = APIRouter()
 
+_SAVE_RE = re.compile(r"<memory_save>(.*?)</memory_save>", re.DOTALL | re.IGNORECASE)
 _APPEND_RE = re.compile(r"<memory_append>(.*?)</memory_append>", re.DOTALL | re.IGNORECASE)
 _PROPOSAL_RE = re.compile(r"<memory_proposal>(.*?)</memory_proposal>", re.DOTALL | re.IGNORECASE)
 _CONSOLIDATION_RE = re.compile(r"<memory_consolidation>(.*?)</memory_consolidation>", re.DOTALL | re.IGNORECASE)
@@ -42,6 +44,7 @@ _COPILOT_REFRESH_SKEW_SECONDS = 300
 
 
 def _strip_memory_blocks(text: str) -> str:
+    text = _SAVE_RE.sub("", text)
     text = _APPEND_RE.sub("", text)
     text = _PROPOSAL_RE.sub("", text)
     text = _CONSOLIDATION_RE.sub("", text)
@@ -70,7 +73,8 @@ def _build_priest_request(
     provider_options: dict = {}
     # Only forward think=True when explicitly enabled; never send think=False because
     # providers like Gemini reject unknown fields and most providers default to no thinking.
-    if not body.no_think and config.default.think:
+    thinking_enabled = not body.no_think and config.default.think
+    if thinking_enabled:
         provider_options["think"] = True
 
     resolved_provider, resolved_model = resolve_provider_model(config, body.profile, body.provider, body.model)
@@ -100,7 +104,14 @@ def _build_priest_request(
     if memories_enabled:
         memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
         base_context.append(build_memory_instructions())
-        request_memory.extend(assemble_memory_entries(memories_dir, config.memory.context_limit))
+        request_memory.extend(
+            assemble_memory_entries(
+                memories_dir,
+                config.memory.context_limit,
+                thinking=thinking_enabled,
+                prompt=body.prompt,
+            )
+        )
     else:
         request_memory = []
 
@@ -230,6 +241,15 @@ async def _apply_memory(
                 else config.memory.size_limit
             )
             memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
+            if m := _SAVE_RE.search(text):
+                try:
+                    save_memories(
+                        memories_dir,
+                        json.loads(m.group(1).strip()),
+                        session_id=response.session.id if response.session else body.session_id,
+                    )
+                except (json.JSONDecodeError, ValueError):
+                    pass
             if m := _APPEND_RE.search(text):
                 try:
                     append_memories(
@@ -370,6 +390,11 @@ async def _sse_generator(body: RunRequest, request: Request, memories: bool):
                 else config.memory.size_limit
             )
             memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
+            if stripper.save_json:
+                try:
+                    save_memories(memories_dir, json.loads(stripper.save_json), session_id=body.session_id)
+                except (json.JSONDecodeError, ValueError):
+                    pass
             if stripper.append_json:
                 try:
                     append_memories(memories_dir, json.loads(stripper.append_json), session_id=body.session_id)

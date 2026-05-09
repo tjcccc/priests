@@ -97,12 +97,10 @@ class WebSearchConfig(BaseModel):
 
 
 class MemoryConfig(BaseModel):
-    size_limit: int = 50000   # max characters in auto_short.md on disk; 0 = unlimited
+    size_limit: int = 50000   # max characters in auto_short.jsonl on disk; 0 = unlimited
     context_limit: int = 0    # max combined characters of approved memory files
                               # injected into the system prompt per turn; 0 = unlimited.
-                              # When exceeded, auto_short sections are dropped
-                              # oldest-first until the block fits. Durable memory
-                              # files are never truncated at injection time.
+                              # Priority/relevance ranking decides what fits.
     flat_line_cap: int = 0    # legacy no-op kept for config compatibility.
 
 

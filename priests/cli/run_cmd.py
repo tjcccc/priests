@@ -99,7 +99,7 @@ async def _run_single(
     from priests.engine_factory import build_engine, load_global_guide
     from priests.memory.extractor import (
         StreamingStripper, clean_last_turn, pop_last_exchange,
-        append_memories, apply_memory_proposals, trim_memories,
+        append_memories, apply_memory_proposals, save_memories, trim_memories,
         deduplicate_file, assemble_memory_entries, build_memory_instructions,
         USER_FILE, PREFERENCES_FILE,
     )
@@ -131,7 +131,11 @@ async def _run_single(
         prompt=prompt,
         session=session_ref,
         context=turn_context,
-        memory=assemble_memory_entries(memories_dir, config.memory.context_limit) if memories else [],
+        memory=(
+            assemble_memory_entries(memories_dir, config.memory.context_limit, thinking=think, prompt=prompt)
+            if memories
+            else []
+        ),
     )
 
     start_ms = int(__import__("time").monotonic() * 1000)
@@ -164,6 +168,8 @@ async def _run_single(
 
     if memories:
         try:
+            if stripper.save_json:
+                save_memories(memories_dir, json.loads(stripper.save_json), session_id=session_id)
             if stripper.append_json:
                 append_memories(memories_dir, json.loads(stripper.append_json), session_id=session_id)
             if stripper.proposal_json:
@@ -259,9 +265,9 @@ _CHAT_HELP = """\
   [bold]/image clear[/bold]       Remove all pending images.
   [dim]Tip: pasting an image file path (Cmd+V) also auto-attaches it.[/dim]
   [bold]/search[/bold] [dim]<query>[/dim]    Run a web search; results are injected into the next message.
-  [bold]/remember[/bold] [dim]<text>[/dim]       Save text to today's short memory (auto_short.md).
-  [bold]/remember user[/bold] [dim]<text>[/dim]  Save approved durable user memory (user.md).
-  [bold]/remember pref[/bold] [dim]<text>[/dim]  Save approved durable preference memory (preferences.md).
+  [bold]/remember[/bold] [dim]<text>[/dim]       Save text to short-term memory (auto_short.jsonl).
+  [bold]/remember user[/bold] [dim]<text>[/dim]  Save approved durable user memory (user.jsonl).
+  [bold]/remember pref[/bold] [dim]<text>[/dim]  Save approved durable preference memory (preferences.jsonl).
   [bold]/help[/bold]              Show this message.\
 """
 
@@ -284,7 +290,7 @@ async def _run_chat(
     from priests.engine_factory import build_engine, load_global_guide
     from priests.memory.extractor import (
         StreamingStripper, clean_last_turn, pop_last_exchange,
-        append_memories, apply_memory_proposals, trim_memories,
+        append_memories, apply_memory_proposals, save_memories, trim_memories,
         deduplicate_file, assemble_memory_entries, build_memory_instructions,
         remember_short, remember_user, remember_preference,
         USER_FILE, PREFERENCES_FILE,
@@ -502,7 +508,7 @@ async def _run_chat(
                         err_console.print("[yellow]Memories are disabled for this profile.[/yellow]")
                     else:
                         remember_user(memories_dir, content)
-                        console.print("[dim]Saved to user.md.[/dim]")
+                        console.print("[dim]Saved to user.jsonl.[/dim]")
                     continue
 
                 elif raw.lower().startswith("/remember pref "):
@@ -513,7 +519,7 @@ async def _run_chat(
                         err_console.print("[yellow]Memories are disabled for this profile.[/yellow]")
                     else:
                         remember_preference(memories_dir, content)
-                        console.print("[dim]Saved to preferences.md.[/dim]")
+                        console.print("[dim]Saved to preferences.jsonl.[/dim]")
                     continue
 
                 elif raw.lower().startswith("/remember "):
@@ -524,7 +530,7 @@ async def _run_chat(
                         err_console.print("[yellow]Memories are disabled for this profile.[/yellow]")
                     else:
                         remember_short(memories_dir, content)
-                        console.print("[dim]Saved to auto_short.md.[/dim]")
+                        console.print("[dim]Saved to auto_short.jsonl.[/dim]")
                     continue
 
                 else:
@@ -534,7 +540,12 @@ async def _run_chat(
             # --- Build turn system context ---
             if memories_on:
                 turn_context = [*context_base, build_memory_instructions()]
-                turn_memory = assemble_memory_entries(memories_dir, config.memory.context_limit)
+                turn_memory = assemble_memory_entries(
+                    memories_dir,
+                    config.memory.context_limit,
+                    thinking=think,
+                    prompt=raw,
+                )
             else:
                 turn_context = context_base
                 turn_memory = []
@@ -683,6 +694,8 @@ async def _run_chat(
 
             if memories_on:
                 try:
+                    if stripper.save_json:
+                        save_memories(memories_dir, json.loads(stripper.save_json), session_id=sid)
                     if stripper.append_json:
                         append_memories(memories_dir, json.loads(stripper.append_json), session_id=sid)
                     if stripper.proposal_json:

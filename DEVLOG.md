@@ -1,5 +1,17 @@
 # DEVLOG
 
+## 2026-05-09 — Structured priority memory
+
+- Canonical profile memory is now stored as JSONL: `user.jsonl`, `preferences.jsonl`, and `auto_short.jsonl`
+- Model output uses hidden `<memory_save>{...}</memory_save>` blocks with `kind`, `text`, `priority`, `confidence`, `stability`, `source`, `evidence`, and `reason`
+- Recall uses priority cutoffs: normal mode includes `0..3`, thinking mode includes `0..10`, then applies `memory.context_limit`
+- The save path deduplicates exact entries, merges stronger priority/confidence, and marks simple conflicting name facts as `superseded`
+- Legacy Markdown memory files remain read-only fallback inputs; writes now go to JSONL
+- Added `scripts/memory_eval.py` for live model evals with a temporary profile, scripted prompts, JSONL memory checks, and semantic reply checks
+- Startup now scaffolds missing JSONL memory files for existing non-default profiles, so upgraded profiles like `robo` get the same memory files as `default`
+
+---
+
 ## 2026-05-09 — v0.20.0 — Rapid-MLX provider and OAuth fixes
 
 - Added local no-key provider `rapidmlx` (`http://localhost:8000/v1`)

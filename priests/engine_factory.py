@@ -21,14 +21,27 @@ _PRIESTS_MD_DEFAULT = """\
 
 You are running inside the priests AI dispatch system.
 Your profile (PROFILE.md, RULES.md, CUSTOM.md) defines your identity and role.
-Your memory files (user.md, preferences.md, auto_short.md) carry approved facts across sessions.
+Your structured memory files (user.jsonl, preferences.jsonl, auto_short.jsonl) carry approved facts across sessions.
 
 Memory instructions for each session are provided dynamically in the system context.
 """
 
 
+def _is_profile_dir(path: Path) -> bool:
+    return path.is_dir() and ((path / "PROFILE.md").exists() or (path / "profile.toml").exists())
+
+
+def _scaffold_existing_profile_memories(profiles_root: Path) -> None:
+    """Create missing memory stubs for existing profiles without changing content."""
+    if not profiles_root.exists():
+        return
+    for profile_dir in profiles_root.iterdir():
+        if _is_profile_dir(profile_dir):
+            _scaffold_memories(profile_dir / "memories")
+
+
 def _bootstrap_profiles(profiles_root: Path) -> None:
-    """Scaffold profiles_root, default profile, and PRIESTS.md on first run."""
+    """Scaffold profiles_root, profiles' memory files, default profile, and PRIESTS.md."""
     default_dir = profiles_root / "default"
     if not default_dir.exists():
         default_dir.mkdir(parents=True, exist_ok=True)
@@ -44,7 +57,7 @@ def _bootstrap_profiles(profiles_root: Path) -> None:
 
     # Ensure new memory files exist for upgraded installs without overwriting
     # legacy notes.md or user-edited memory files.
-    _scaffold_memories(default_dir / "memories")
+    _scaffold_existing_profile_memories(profiles_root)
 
     # Always overwrite PRIESTS.md to keep it current across upgrades.
     guide_path = profiles_root.parent / _PRIESTS_MD
@@ -55,6 +68,9 @@ def _scaffold_memories(memories_dir: Path) -> None:
     """Create the standard memory file stubs in a profile's memories directory."""
     memories_dir.mkdir(parents=True, exist_ok=True)
     for fname, content in (
+        ("user.jsonl", ""),
+        ("preferences.jsonl", ""),
+        ("auto_short.jsonl", ""),
         ("user.md", "# User\n\n"),
         ("preferences.md", "# Preferences\n\n"),
         ("auto_short.md", "# Short Memories\n\n"),
@@ -62,7 +78,6 @@ def _scaffold_memories(memories_dir: Path) -> None:
         path = memories_dir / fname
         if not path.exists():
             path.write_text(content, encoding="utf-8")
-    (memories_dir / "pending").mkdir(exist_ok=True)
 
 
 def load_global_guide(config: AppConfig) -> str | None:

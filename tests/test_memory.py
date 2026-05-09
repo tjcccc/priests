@@ -8,16 +8,18 @@ performance benchmarks in bench_memory.py.
 from __future__ import annotations
 
 import dataclasses
+import json
 import re
-from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
 from priests.memory.extractor import (
     AUTO_FILE,
+    AUTO_JSONL_FILE,
     NOTES_FILE,
-    PENDING_DIR,
     PREFERENCES_FILE,
+    PREFERENCES_JSONL_FILE,
     USER_FILE,
+    USER_JSONL_FILE,
     apply_memory_proposals,
     assemble_memory_entries,
     append_memories,
@@ -27,6 +29,7 @@ from priests.memory.extractor import (
     needs_consolidation,
     remember_preference,
     remember_user,
+    save_memories,
     trim_memories,
 )
 
@@ -47,25 +50,27 @@ class _Session:
     turns: list[_Turn]
 
 
+def _read_jsonl(path):
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
 # ---------------------------------------------------------------------------
 # append_memories
 # ---------------------------------------------------------------------------
 
 
-def test_append_memories_user_key_creates_pending_proposal(tmp_path):
+def test_append_memories_user_key_writes_user_jsonl(tmp_path):
     append_memories(tmp_path, {"user": "Prefers dark mode."})
-    assert not (tmp_path / USER_FILE).exists()
-    proposals = list((tmp_path / PENDING_DIR).glob("*.md"))
-    assert len(proposals) == 1
-    assert "target: user" in proposals[0].read_text()
-    assert "Prefers dark mode." in proposals[0].read_text()
+    rows = _read_jsonl(tmp_path / USER_JSONL_FILE)
+    assert rows[0]["text"] == "Prefers dark mode."
+    assert rows[0]["kind"] == "user"
 
 
-def test_append_memories_auto_short_gets_today_header(tmp_path):
+def test_append_memories_auto_short_writes_auto_jsonl(tmp_path):
     append_memories(tmp_path, {"auto_short": "Fixed a bug."})
-    content = (tmp_path / AUTO_FILE).read_text()
-    assert f"## {date.today().isoformat()}" in content
-    assert "Fixed a bug." in content
+    rows = _read_jsonl(tmp_path / AUTO_JSONL_FILE)
+    assert rows[0]["text"] == "Fixed a bug."
+    assert rows[0]["kind"] == "auto_short"
 
 
 def test_append_memories_empty_fields_create_no_files(tmp_path):
@@ -73,37 +78,219 @@ def test_append_memories_empty_fields_create_no_files(tmp_path):
     assert not (tmp_path / USER_FILE).exists()
     assert not (tmp_path / NOTES_FILE).exists()
     assert not (tmp_path / AUTO_FILE).exists()
-    assert not (tmp_path / PENDING_DIR).exists()
+    assert not (tmp_path / PREFERENCES_FILE).exists()
+    assert not (tmp_path / USER_JSONL_FILE).exists()
+    assert not (tmp_path / PREFERENCES_JSONL_FILE).exists()
+    assert not (tmp_path / AUTO_JSONL_FILE).exists()
 
 
-def test_append_memories_re_append_creates_multiple_pending_files(tmp_path):
+def test_memory_writers_ignore_non_object_payloads(tmp_path):
+    append_memories(tmp_path, ["note"])  # type: ignore[arg-type]
+    apply_memory_proposals(tmp_path, ["note"])  # type: ignore[arg-type]
+    save_memories(tmp_path, ["note"])  # type: ignore[arg-type]
+
+    assert not (tmp_path / USER_JSONL_FILE).exists()
+    assert not (tmp_path / PREFERENCES_JSONL_FILE).exists()
+    assert not (tmp_path / AUTO_JSONL_FILE).exists()
+
+
+def test_append_memories_re_append_adds_to_user_jsonl(tmp_path):
     append_memories(tmp_path, {"user": "Line one."})
     append_memories(tmp_path, {"user": "Line two."})
-    contents = "\n".join(p.read_text() for p in (tmp_path / PENDING_DIR).glob("*.md"))
-    assert "Line one." in contents
-    assert "Line two." in contents
+    rows = _read_jsonl(tmp_path / USER_JSONL_FILE)
+    assert [row["text"] for row in rows] == ["Line one.", "Line two."]
 
 
-def test_append_memories_notes_key_becomes_preferences_proposal(tmp_path):
+def test_append_memories_notes_key_writes_preferences_jsonl(tmp_path):
     append_memories(tmp_path, {"notes": "Likes concise replies."})
-    proposal = next((tmp_path / PENDING_DIR).glob("*.md"))
-    text = proposal.read_text()
-    assert "target: preferences" in text
-    assert "Likes concise replies." in text
+    assert _read_jsonl(tmp_path / PREFERENCES_JSONL_FILE)[0]["text"] == "Likes concise replies."
 
 
-def test_apply_memory_proposals_writes_pending_markdown(tmp_path):
+def test_apply_memory_proposals_writes_preferences_jsonl(tmp_path):
     apply_memory_proposals(
         tmp_path,
         {"proposals": [{"target": "preferences", "content": "- Prefers examples.", "reason": "User said so."}]},
         session_id="sess-1",
     )
-    proposal = next((tmp_path / PENDING_DIR).glob("*.md"))
-    text = proposal.read_text()
-    assert "status: pending" in text
-    assert "target: preferences" in text
-    assert "session_id: sess-1" in text
-    assert "- Prefers examples." in text
+    assert _read_jsonl(tmp_path / PREFERENCES_JSONL_FILE)[0]["text"] == "- Prefers examples."
+    assert not (tmp_path / "pending").exists()
+
+
+def test_apply_memory_proposals_writes_user_jsonl(tmp_path):
+    apply_memory_proposals(
+        tmp_path,
+        {"proposals": [{"target": "user", "content": "- Name: Jack"}]},
+        session_id="sess-1",
+    )
+    assert _read_jsonl(tmp_path / USER_JSONL_FILE)[0]["text"] == "- Name: Jack"
+    assert not (tmp_path / "pending").exists()
+
+
+def test_apply_memory_proposals_accepts_legacy_flat_payload(tmp_path):
+    apply_memory_proposals(tmp_path, {"user": "- Name: Jack", "preferences": "- Keep replies short"})
+
+    assert _read_jsonl(tmp_path / USER_JSONL_FILE)[0]["text"] == "- Name: Jack"
+    assert _read_jsonl(tmp_path / PREFERENCES_JSONL_FILE)[0]["text"] == "- Keep replies short"
+    assert not (tmp_path / "pending").exists()
+
+
+def test_save_memories_writes_priority_zero_user_memory(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "The user's name is Jack.",
+                    "priority": 0,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                    "evidence": "My name is Jack.",
+                    "reason": "User explicitly stated their name.",
+                }
+            ]
+        },
+    )
+
+    row = _read_jsonl(tmp_path / USER_JSONL_FILE)[0]
+    assert row["priority"] == 0
+    assert row["confidence"] == 1
+    assert row["status"] == "active"
+
+
+def test_save_memories_coerces_time_sensitive_user_fact_to_auto_short(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "I have a project meeting tomorrow at 3 p.m.",
+                    "priority": 2,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                }
+            ]
+        },
+    )
+
+    assert not (tmp_path / USER_JSONL_FILE).read_text().strip()
+    row = _read_jsonl(tmp_path / AUTO_JSONL_FILE)[0]
+    assert row["kind"] == "auto_short"
+    assert "project meeting" in row["text"]
+
+
+def test_save_memories_coerces_response_style_user_fact_to_preferences(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "I prefer short, normal conversation replies.",
+                    "priority": 2,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                }
+            ]
+        },
+    )
+
+    assert not (tmp_path / USER_JSONL_FILE).read_text().strip()
+    row = _read_jsonl(tmp_path / PREFERENCES_JSONL_FILE)[0]
+    assert row["kind"] == "preferences"
+    assert "short" in row["text"]
+
+
+def test_save_memories_merges_duplicate_memory_with_best_priority(tmp_path):
+    save_memories(tmp_path, {"memories": [{"kind": "preferences", "text": "Prefers short replies.", "priority": 5}]})
+    save_memories(tmp_path, {"memories": [{"kind": "preferences", "text": "Prefers short replies.", "priority": 2}]})
+
+    rows = _read_jsonl(tmp_path / PREFERENCES_JSONL_FILE)
+    assert len(rows) == 1
+    assert rows[0]["priority"] == 2
+
+
+def test_save_memories_supersedes_conflicting_name(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "The user's name is Jack.",
+                    "priority": 0,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                }
+            ]
+        },
+    )
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "The user's name is Tao.",
+                    "priority": 0,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                }
+            ]
+        },
+    )
+
+    rows = _read_jsonl(tmp_path / USER_JSONL_FILE)
+    assert [row["status"] for row in rows] == ["superseded", "active"]
+    assert rows[1]["supersedes"] == [rows[0]["id"]]
+    combined = "\n".join(assemble_memory_entries(tmp_path))
+    assert "Tao" in combined
+    assert "Jack" not in combined
+
+
+def test_save_memories_supersedes_conflicting_project_meeting_time(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "auto_short",
+                    "text": "The user has a project meeting tomorrow at 3 p.m.",
+                    "priority": 2,
+                    "confidence": 1,
+                    "stability": "session",
+                    "source": "user_direct",
+                }
+            ]
+        },
+    )
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "auto_short",
+                    "text": "The project meeting tomorrow is at 4 p.m., not 3 p.m.",
+                    "priority": 2,
+                    "confidence": 1,
+                    "stability": "session",
+                    "source": "user_direct",
+                }
+            ]
+        },
+    )
+
+    rows = _read_jsonl(tmp_path / AUTO_JSONL_FILE)
+    assert [row["status"] for row in rows] == ["superseded", "active"]
+    combined = "\n".join(assemble_memory_entries(tmp_path))
+    assert "4 p.m." in combined
+    assert "project meeting tomorrow at 3 p.m." not in combined
 
 
 # ---------------------------------------------------------------------------
@@ -115,20 +302,19 @@ def test_apply_consolidation_ignores_durable_keys(tmp_path):
     (tmp_path / USER_FILE).write_text("old content\n")
     apply_consolidation(tmp_path, {"user": "new content"})
     assert (tmp_path / USER_FILE).read_text() == "old content\n"
+    assert not (tmp_path / USER_JSONL_FILE).exists()
 
 
-def test_apply_consolidation_auto_short_without_header_gets_wrapped(tmp_path):
+def test_apply_consolidation_auto_short_without_header_writes_jsonl(tmp_path):
     apply_consolidation(tmp_path, {"auto_short": "a bare note"})
-    content = (tmp_path / AUTO_FILE).read_text()
-    assert f"## {date.today().isoformat()}" in content
-    assert "a bare note" in content
+    assert _read_jsonl(tmp_path / AUTO_JSONL_FILE)[0]["text"] == "a bare note"
 
 
-def test_apply_consolidation_auto_short_with_header_not_double_wrapped(tmp_path):
+def test_apply_consolidation_auto_short_with_header_stores_single_entry(tmp_path):
     apply_consolidation(tmp_path, {"auto_short": "## 2026-01-01\n\na note"})
-    content = (tmp_path / AUTO_FILE).read_text()
-    # Exactly one dated section header
-    assert content.count("## ") == 1
+    rows = _read_jsonl(tmp_path / AUTO_JSONL_FILE)
+    assert len(rows) == 1
+    assert rows[0]["text"].count("## ") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +364,19 @@ def test_trim_memories_single_section_never_dropped(tmp_path):
     assert "only section" in result
 
 
+def test_trim_memories_structured_keeps_priority_zero(tmp_path):
+    memories = [{"kind": "auto_short", "text": "Critical short fact.", "priority": 0, "confidence": 1, "stability": "stable"}]
+    for idx in range(20):
+        memories.append({"kind": "auto_short", "text": f"low priority fact {idx} " * 20, "priority": 9})
+    save_memories(tmp_path, {"memories": memories})
+
+    trim_memories(tmp_path, 800)
+
+    rows = _read_jsonl(tmp_path / AUTO_JSONL_FILE)
+    assert any(row["text"] == "Critical short fact." for row in rows)
+    assert (tmp_path / AUTO_JSONL_FILE).stat().st_size <= 800
+
+
 # ---------------------------------------------------------------------------
 # needs_consolidation
 # ---------------------------------------------------------------------------
@@ -197,22 +396,29 @@ def test_remember_user_and_preference_write_approved_files(tmp_path):
     remember_user(tmp_path, "- User is Atlas.")
     remember_preference(tmp_path, "- Prefers concise replies.")
 
-    assert "Atlas" in (tmp_path / USER_FILE).read_text()
-    assert "concise" in (tmp_path / PREFERENCES_FILE).read_text()
+    assert "Atlas" in _read_jsonl(tmp_path / USER_JSONL_FILE)[0]["text"]
+    assert "concise" in _read_jsonl(tmp_path / PREFERENCES_JSONL_FILE)[0]["text"]
 
 
 def test_assemble_memory_entries_orders_short_term_last(tmp_path):
-    (tmp_path / USER_FILE).write_text("user fact")
-    (tmp_path / PREFERENCES_FILE).write_text("preference fact")
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {"kind": "user", "text": "user fact", "priority": 1, "confidence": 1, "stability": "stable"},
+                {"kind": "preferences", "text": "preference fact", "priority": 2},
+                {"kind": "auto_short", "text": "auto fact", "priority": 3, "stability": "session"},
+            ]
+        },
+    )
     (tmp_path / NOTES_FILE).write_text("legacy note")
-    (tmp_path / AUTO_FILE).write_text("# Short Memories\n\n## 2026-01-01\n\nauto fact\n")
 
     entries = assemble_memory_entries(tmp_path)
 
-    assert "Approved User Memory" in entries[0]
-    assert "Approved Preference Memory" in entries[1]
+    assert "Important User Memory" in entries[0]
+    assert "Preferences" in entries[1]
     assert "Legacy Notes Memory" in entries[2]
-    assert "Short-Term Memory" in entries[3]
+    assert "Current Context" in entries[3]
 
 
 def test_assemble_memory_entries_ignores_empty_stub_headers(tmp_path):
@@ -224,19 +430,62 @@ def test_assemble_memory_entries_ignores_empty_stub_headers(tmp_path):
 
 
 def test_assemble_memory_entries_context_limit_truncates_auto_short(tmp_path):
-    (tmp_path / USER_FILE).write_text("u" * 50)
-    (tmp_path / PREFERENCES_FILE).write_text("p" * 50)
-    auto_lines = ["# Short Memories\n"]
+    memories = [
+        {"kind": "user", "text": "u" * 50, "priority": 1, "confidence": 1, "stability": "stable"},
+        {"kind": "preferences", "text": "p" * 50, "priority": 2},
+    ]
     for day in range(1, 6):
-        auto_lines.append(f"\n## 2026-01-{day:02d}\n\n{'x' * 200}\n")
-    (tmp_path / AUTO_FILE).write_text("".join(auto_lines))
+        memories.append({"kind": "auto_short", "text": f"2026-01-{day:02d}: {'x' * 200}", "priority": 3})
+    save_memories(tmp_path, {"memories": memories})
 
     entries = assemble_memory_entries(tmp_path, context_limit=350)
     combined = "\n".join(entries)
 
     assert "u" * 50 in combined
     assert "p" * 50 in combined
-    assert len(re.findall(r"## 2026-01-\d+", combined)) < 5
+    assert len(re.findall(r"2026-01-\d+", combined)) < 5
+
+
+def test_assemble_memory_entries_priority_cutoff_normal_vs_thinking(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "The user's name is Jack.",
+                    "priority": 0,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                },
+                {"kind": "auto_short", "text": "Low priority old context.", "priority": 8},
+            ]
+        },
+    )
+
+    normal = "\n".join(assemble_memory_entries(tmp_path))
+    thinking = "\n".join(assemble_memory_entries(tmp_path, thinking=True))
+
+    assert "Jack" in normal
+    assert "Low priority" not in normal
+    assert "Low priority" in thinking
+
+
+def test_assemble_memory_entries_ranks_relevant_memory_within_priority(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {"kind": "preferences", "text": "Prefers Python examples.", "priority": 2},
+                {"kind": "preferences", "text": "Prefers Go examples.", "priority": 2},
+            ]
+        },
+    )
+
+    combined = "\n".join(assemble_memory_entries(tmp_path, prompt="Can you show Python code?"))
+
+    assert combined.index("Python examples") < combined.index("Go examples")
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +542,7 @@ def test_deduplicate_file_absent_file_returns_false(tmp_path):
 async def test_clean_last_turn_strips_memory_block():
     turn = _Turn(
         role="assistant",
-        content='<memory_append>{"user": "test"}</memory_append>Here is the answer.',
+        content='<memory_save>{"memories":[{"kind":"user","text":"test"}]}</memory_save>Here is the answer.',
     )
     session = _Session(turns=[turn])
     store = MagicMock()
@@ -304,7 +553,7 @@ async def test_clean_last_turn_strips_memory_block():
 
     store.save.assert_called_once()
     saved: _Session = store.save.call_args[0][0]
-    assert "<memory_append>" not in saved.turns[-1].content
+    assert "<memory_save>" not in saved.turns[-1].content
     assert "Here is the answer." in saved.turns[-1].content
 
 
@@ -351,11 +600,11 @@ async def test_clean_last_turn_user_last_turn_is_noop():
 
 
 def test_stripper_two_consecutive_blocks_both_captured():
-    """A proposal block followed by an append block: both payloads extracted."""
+    """A save block followed by a legacy append block: both payloads extracted."""
     from priests.memory.extractor import StreamingStripper
 
     text = (
-        '<memory_proposal>{"proposals":[{"target":"user","content":"fact"}]}</memory_proposal>'
+        '<memory_save>{"memories":[{"kind":"user","text":"fact"}]}</memory_save>'
         '<memory_append>{"auto_short":"appended"}</memory_append>'
         "prose after"
     )
@@ -365,7 +614,7 @@ def test_stripper_two_consecutive_blocks_both_captured():
         visible += s.feed(ch)
     visible += s.flush()
 
-    assert s.proposal_json == '{"proposals":[{"target":"user","content":"fact"}]}'
+    assert s.save_json == '{"memories":[{"kind":"user","text":"fact"}]}'
     assert s.append_json == '{"auto_short":"appended"}'
     assert "prose after" in visible
     assert "<memory_" not in visible
@@ -375,7 +624,7 @@ def test_stripper_incomplete_block_discarded_at_flush():
     """A block whose closing tag never arrives is discarded silently at flush."""
     from priests.memory.extractor import StreamingStripper
 
-    text = "<memory_append>incomplete payload — no closing tag"
+    text = "<memory_save>incomplete payload - no closing tag"
     s = StreamingStripper()
     for ch in text:
         s.feed(ch)
@@ -383,4 +632,4 @@ def test_stripper_incomplete_block_discarded_at_flush():
 
     # Block content is captured internally (flush saves what it has)
     # but nothing is emitted as visible text during the block
-    assert "<memory_append>" not in visible
+    assert "<memory_save>" not in visible

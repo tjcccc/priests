@@ -99,6 +99,7 @@ def test_run_memories_false_skips_store(client):
     # Response has a session so clean_last_turn would normally be called.
     engine.run.return_value = _ok_response("ok", session_id="sess-1")
     with patch("priests.service.routes.run.clean_last_turn", new=AsyncMock()), \
+         patch("priests.service.routes.run.save_memories") as mock_save, \
          patch("priests.service.routes.run.append_memories") as mock_append, \
          patch("priests.service.routes.run.apply_memory_proposals") as mock_proposals, \
          patch("priests.service.routes.run.trim_memories") as mock_trim:
@@ -106,6 +107,7 @@ def test_run_memories_false_skips_store(client):
     assert resp.status_code == 200
     call_request = engine.run.call_args[0][0]
     assert call_request.memory == []
+    mock_save.assert_not_called()
     mock_append.assert_not_called()
     mock_proposals.assert_not_called()
     mock_trim.assert_not_called()
@@ -113,11 +115,11 @@ def test_run_memories_false_skips_store(client):
 
 def test_run_strips_memory_blocks_from_text(client):
     c, engine, _ = client
-    raw = "Hello!<memory_append>[\"note\"]</memory_append> How are you?"
+    raw = 'Hello!<memory_save>{"memories":[{"kind":"user","text":"fact"}]}</memory_save> How are you?'
     engine.run.return_value = _ok_response(raw)
     resp = c.post("/v1/run?memories=false", json={"prompt": "hi"})
     assert resp.status_code == 200
-    assert "<memory_append>" not in resp.json()["text"]
+    assert "<memory_save>" not in resp.json()["text"]
     assert "Hello!" in resp.json()["text"]
 
 
@@ -268,6 +270,7 @@ def test_run_assembles_profile_memory_into_request_memory(client, tmp_path):
     (memories_dir / "notes.md").write_text("Legacy fact.")
     (memories_dir / "auto_short.md").write_text("# Short Memories\n\n## 2026-01-01\n\nShort fact.\n")
     c.app.state.config.paths.profiles_dir = tmp_path
+    c.app.state.config.default.think = True
     engine.run.return_value = _ok_response("memory")
 
     resp = c.post("/v1/run", json={"prompt": "hi", "profile": "coder"})
@@ -307,6 +310,22 @@ def test_profile_api_reads_and_writes_model_override(client, tmp_path):
     body = c.get("/v1/profiles/coder").json()
     assert body["provider"] is None
     assert body["model"] is None
+
+
+def test_profile_api_create_scaffolds_memory_files(client, tmp_path):
+    c, _, _ = client
+    c.app.state.config.paths.profiles_dir = tmp_path
+
+    resp = c.post("/v1/profiles", json={"name": "robo"})
+
+    assert resp.status_code == 201
+    memories_dir = tmp_path / "robo" / "memories"
+    assert (memories_dir / "user.jsonl").exists()
+    assert (memories_dir / "preferences.jsonl").exists()
+    assert (memories_dir / "auto_short.jsonl").exists()
+    assert (memories_dir / "user.md").exists()
+    assert (memories_dir / "preferences.md").exists()
+    assert (memories_dir / "auto_short.md").exists()
 
 
 # ---------------------------------------------------------------------------

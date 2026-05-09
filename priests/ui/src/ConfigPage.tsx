@@ -1128,7 +1128,7 @@ export default function ConfigPage() {
                   <SectionHeader title="Memory" />
                   <Card>
                     <div className="px-6 py-5 divide-y divide-black/[0.04]">
-                      <Field label="Size limit (chars)" note="Max chars in auto_short.md. 0 = unlimited.">
+                      <Field label="Size limit (chars)" note="Max chars in auto_short.jsonl. 0 = unlimited.">
                         <NumberInput value={memory.size_limit}
                           onChange={v => setMemory(m => m ? { ...m, size_limit: v } : m)} min={0} />
                       </Field>
