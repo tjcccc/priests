@@ -1,5 +1,15 @@
 # DEVLOG
 
+## 2026-05-10 — v0.23.0 — SPM reliability and budget hardening
+
+- Added `/delete-memory <query>` and `POST /v1/profiles/{name}/memories/delete` for permanent profile-scoped JSONL deletion, keeping `/forget` as soft supersession
+- Hardened hidden control-block stripping so split or malformed memory tags are stripped before streaming output and visible session history persistence
+- Added stricter priority/kind guardrails and cheap-prompt recall gating so simple greetings do not pull broad memory or memory write instructions
+- Expanded deterministic memory tests and live eval options for professional/stress memory scenarios and JSON reports
+- Default memory recall now uses a bounded `memory.context_limit`, while `0` still means explicit unlimited context
+
+---
+
 ## 2026-05-10 — v0.22.0 — Structured Priority Memory
 
 - Canonical profile memory is now stored as JSONL: `user.jsonl`, `preferences.jsonl`, and `auto_short.jsonl`

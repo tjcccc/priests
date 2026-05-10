@@ -101,6 +101,7 @@ _CONFLICT_KEY_ALIASES = {
 _DEFAULT_PRIORITY = 5
 _NORMAL_PRIORITY_CUTOFF = 3
 _THINKING_PRIORITY_CUTOFF = 10
+_SIMPLE_CORE_PRIORITY_CUTOFF = 0
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -202,11 +203,27 @@ def _looks_time_sensitive(text: str) -> bool:
 
 def _looks_response_preference(text: str) -> bool:
     normalized = _normalize_text(text)
+    if re.search(r"(偏好|喜欢).*(回答|回复|简短|详细|中文|英文)", normalized):
+        return True
     if not re.search(r"\b(prefer|prefers|preference|like|likes)\b", normalized):
         return False
     return bool(
         re.search(r"\b(reply|replies|answer|answers|response|responses|conversation|tone|style)\b", normalized)
         or re.search(r"\b(short|brief|concise|detailed|normal|casual|formal)\b", normalized)
+    )
+
+
+def _looks_identity_name_fact(text: str) -> bool:
+    normalized = _normalize_text(text)
+    return bool(
+        re.search(
+            r"\b(?:the\s+)?user(?:'s)?\s+name\s+is\b"
+            r"|\buser\s+is\s+named\b"
+            r"|^name\s*:"
+            r"|\bpreferred\s+name\b"
+            r"|\bcall\s+(?:the\s+)?user\b",
+            normalized,
+        )
     )
 
 
@@ -275,15 +292,7 @@ def _favorite_conflict_key_from_text(text: str) -> str:
 def _inferred_conflict_group(entry: "MemoryEntry") -> str | None:
     text = _normalize_text(entry.text)
     if entry.kind == "user":
-        name_patterns = (
-            r"\buser(?:'s)? name is\b",
-            r"\bthe user(?:'s)? name is\b",
-            r"^name\s*:",
-            r"\buser is named\b",
-            r"\bpreferred name\b",
-            r"\bcalled\b",
-        )
-        if any(re.search(pattern, text) for pattern in name_patterns):
+        if _looks_identity_name_fact(text):
             return "user.name"
         if favorite_key := _favorite_conflict_key_from_text(text):
             return favorite_key
@@ -366,6 +375,28 @@ def _tokens(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9_]+", text.lower()))
 
 
+def is_simple_memory_prompt(prompt: str) -> bool:
+    """Return True for prompts that should not pay broad memory costs."""
+    if not isinstance(prompt, str):
+        return False
+    normalized = _normalize_text(prompt)
+    if not normalized or len(normalized) > 80:
+        return False
+    simple_patterns = (
+        r"^(?:hi|hello|hey|yo|sup|hiya|howdy)$",
+        r"^(?:hi|hello|hey|yo|hiya|howdy)[!. ]*$",
+        r"^(?:thanks|thank you|thx|ty|ok|okay|k|cool|nice|great|got it|sounds good)[!. ]*$",
+        r"^(?:good morning|good afternoon|good evening|good night)[!. ]*$",
+        r"^(?:yes|no|yep|yeah|nope|sure|alright|all right)[!. ]*$",
+    )
+    return any(re.fullmatch(pattern, normalized) for pattern in simple_patterns)
+
+
+def should_inject_memory_instructions(prompt: str) -> bool:
+    """Memory write policy can be skipped for cheap non-memory turns."""
+    return not is_simple_memory_prompt(prompt)
+
+
 @dataclasses.dataclass
 class MemoryEntry:
     id: str
@@ -415,16 +446,36 @@ class MemoryEntry:
         if source not in _ALLOWED_SOURCE:
             source = default_source if default_source in _ALLOWED_SOURCE else "model_inferred"
 
-        if priority == 0 and (confidence < 0.9 or stability != "stable"):
-            priority = 1
-
         status = raw.get("status") if isinstance(raw.get("status"), str) else "active"
         if status not in _ALLOWED_STATUS:
             status = "active"
 
-        conflict_key = _normalize_conflict_key(raw.get("conflict_key") or raw.get("conflicts_with"))
+        raw_conflict_value = raw.get("conflict_key") or raw.get("conflicts_with")
+        raw_conflict_provided = bool(_payload_text(raw_conflict_value))
+        conflict_key = _normalize_conflict_key(raw_conflict_value)
         if conflict_key and not conflict_key.startswith(f"{kind}."):
             conflict_key = ""
+        if kind == "preferences" and not conflict_key and not raw_conflict_provided and _looks_response_preference(text):
+            conflict_key = "preferences.reply_style"
+        if kind == "auto_short" and not conflict_key and not raw_conflict_provided and "meeting" in _normalize_text(text):
+            if "project meeting" in _normalize_text(text):
+                conflict_key = "auto_short.project_meeting_time"
+            elif re.search(r"\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?|am|pm)\b", _normalize_text(text)):
+                conflict_key = "auto_short.meeting_time"
+
+        priority_zero_allowed = (
+            kind == "user"
+            and confidence >= 0.9
+            and stability == "stable"
+            and (conflict_key == "user.name" or _looks_identity_name_fact(text))
+        )
+        if priority == 0 and not priority_zero_allowed:
+            if kind == "preferences":
+                priority = 2
+            elif kind == "auto_short":
+                priority = 3
+            else:
+                priority = 1
 
         raw_supersedes = raw.get("supersedes")
         supersedes = [str(v) for v in raw_supersedes if str(v).strip()] if isinstance(raw_supersedes, list) else []
@@ -503,6 +554,13 @@ class StreamingStripper:
         self.consolidation_json: str | None = None
         self.search_query: str | None = None
         self.read_file_path: str | None = None
+        self.save_jsons: list[str] = []
+        self.append_jsons: list[str] = []
+        self.proposal_jsons: list[str] = []
+        self.forget_jsons: list[str] = []
+        self.consolidation_jsons: list[str] = []
+        self.search_queries: list[str] = []
+        self.read_file_paths: list[str] = []
 
     def _find_open(self, text: str) -> tuple[str | None, int, int]:
         lo = text.lower()
@@ -541,18 +599,25 @@ class StreamingStripper:
         payload = content.strip()
         if block_type == "save":
             self.save_json = payload
+            self.save_jsons.append(payload)
         elif block_type == "append":
             self.append_json = payload
+            self.append_jsons.append(payload)
         elif block_type == "proposal":
             self.proposal_json = payload
+            self.proposal_jsons.append(payload)
         elif block_type == "forget":
             self.forget_json = payload
+            self.forget_jsons.append(payload)
         elif block_type == "consolidation":
             self.consolidation_json = payload
+            self.consolidation_jsons.append(payload)
         elif block_type == "search":
             self.search_query = payload
+            self.search_queries.append(payload)
         else:
             self.read_file_path = payload
+            self.read_file_paths.append(payload)
 
     def feed(self, chunk: str) -> str:
         self._buf += chunk
@@ -904,9 +969,11 @@ def _extract_favorite_memories(prompt: str, body: str) -> list[MemoryEntry]:
 
 def _extract_preference_memory(prompt: str, body: str) -> MemoryEntry | None:
     match = re.search(r"\bi\s+prefer\s+([^\n.!?。！？;；]{1,160})", body, flags=re.IGNORECASE)
-    if not match:
-        return None
-    preference = _clean_memory_value(match.group(1))
+    if match:
+        preference = _clean_memory_value(match.group(1))
+    else:
+        cn_match = re.search(r"我(?:喜欢|偏好)\s*([^\n。！？!?;；]{1,160})", body)
+        preference = _clean_memory_value(cn_match.group(1)) if cn_match else ""
     if not preference:
         return None
     conflict_key = "preferences.reply_style" if _looks_response_preference(body) else ""
@@ -1015,14 +1082,25 @@ def _forget_queries_from_prompt(prompt: str) -> list[str]:
     return list(dict.fromkeys(queries))
 
 
+def _entry_matches_query(entry: MemoryEntry, query: str, *, kind: str | None = None) -> bool:
+    normalized_kind = _normalize_kind(kind) if kind else ""
+    if normalized_kind and entry.kind != normalized_kind:
+        return False
+    conflict_key = _normalize_conflict_key(query)
+    query_text = _normalize_text(query)
+    query_tokens = _tokens(query_text)
+    text = _normalize_text(entry.text)
+    text_tokens = _tokens(entry.text)
+    matches_conflict_key = bool(conflict_key and conflict_key in _conflict_groups(entry))
+    matches_text = bool(query_text and query_text in text)
+    matches_tokens = bool(query_tokens and query_tokens.issubset(text_tokens))
+    return matches_conflict_key or matches_text or matches_tokens
+
+
 def forget_memories(memories_dir: Path, query: str, *, kind: str | None = None) -> int:
     query = query.strip() if isinstance(query, str) else ""
     if not query:
         return 0
-    normalized_kind = _normalize_kind(kind) if kind else ""
-    conflict_key = _normalize_conflict_key(query)
-    query_text = _normalize_text(query)
-    query_tokens = _tokens(query_text)
     now = _utc_now()
     forgotten = 0
 
@@ -1031,17 +1109,12 @@ def forget_memories(memories_dir: Path, query: str, *, kind: str | None = None) 
             memory_kind: _load_jsonl(memories_dir / filename) for memory_kind, filename in _KIND_TO_JSONL.items()
         }
         for memory_kind, entries in by_kind.items():
-            if normalized_kind and memory_kind != normalized_kind:
+            if kind and _normalize_kind(kind) != memory_kind:
                 continue
             for entry in entries:
                 if entry.status != "active":
                     continue
-                text = _normalize_text(entry.text)
-                text_tokens = _tokens(entry.text)
-                matches_conflict_key = bool(conflict_key and conflict_key in _conflict_groups(entry))
-                matches_text = bool(query_text and query_text in text)
-                matches_tokens = bool(query_tokens and query_tokens.issubset(text_tokens))
-                if matches_conflict_key or matches_text or matches_tokens:
+                if _entry_matches_query(entry, query, kind=kind):
                     entry.status = "superseded"
                     entry.updated_at = now
                     forgotten += 1
@@ -1049,6 +1122,44 @@ def forget_memories(memories_dir: Path, query: str, *, kind: str | None = None) 
             for memory_kind, entries in by_kind.items():
                 _write_jsonl(memories_dir / _KIND_TO_JSONL[memory_kind], entries)
     return forgotten
+
+
+def delete_memories(memories_dir: Path, query: str, *, kind: str | None = None) -> int:
+    """Permanently remove matching structured memory rows from JSONL files."""
+    query = query.strip() if isinstance(query, str) else ""
+    if not query:
+        return 0
+    deleted = 0
+    normalized_kind = _normalize_kind(kind) if kind else ""
+
+    with _memory_write_lock(memories_dir):
+        for memory_kind, filename in _KIND_TO_JSONL.items():
+            if normalized_kind and normalized_kind != memory_kind:
+                continue
+            path = memories_dir / filename
+            if not path.exists():
+                continue
+            original_lines = path.read_text(encoding="utf-8").splitlines()
+            kept_lines: list[str] = []
+            changed = False
+            for line in original_lines:
+                if not line.strip():
+                    kept_lines.append(line)
+                    continue
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError:
+                    kept_lines.append(line)
+                    continue
+                entry = MemoryEntry.from_dict(raw) if isinstance(raw, dict) else None
+                if entry is not None and _entry_matches_query(entry, query, kind=kind):
+                    deleted += 1
+                    changed = True
+                    continue
+                kept_lines.append(line)
+            if changed:
+                _atomic_write(path, "\n".join(kept_lines) + ("\n" if kept_lines else ""))
+    return deleted
 
 
 def apply_memory_forget(memories_dir: Path, payload: dict[str, Any], *, session_id: str | None = None) -> int:
@@ -1219,6 +1330,8 @@ def assemble_memory_entries(
     inputs and are assigned fixed priorities.
     """
     cutoff = _THINKING_PRIORITY_CUTOFF if thinking else _NORMAL_PRIORITY_CUTOFF
+    if is_simple_memory_prompt(prompt):
+        cutoff = _SIMPLE_CORE_PRIORITY_CUTOFF
     prompt_tokens = _tokens(prompt)
     now_ts = datetime.now(timezone.utc).timestamp()
     candidates = [
@@ -1487,12 +1600,8 @@ def mark_consolidated(memories_dir: Path) -> None:
 
 
 def _strip_memory_blocks(text: str) -> str:
-    text = _SAVE_RE.sub("", text)
-    text = _APPEND_RE.sub("", text)
-    text = _PROPOSAL_RE.sub("", text)
-    text = _FORGET_RE.sub("", text)
-    text = _CONSOLIDATION_RE.sub("", text)
-    return text
+    stripper = StreamingStripper()
+    return stripper.feed(text) + stripper.flush()
 
 
 async def clean_last_turn(store, session_id: str) -> None:
@@ -1500,14 +1609,12 @@ async def clean_last_turn(store, session_id: str) -> None:
     if not session or not session.turns:
         return
     last = session.turns[-1]
-    if last.role == "assistant" and (
-        _SAVE_RE.search(last.content)
-        or _APPEND_RE.search(last.content)
-        or _PROPOSAL_RE.search(last.content)
-        or _FORGET_RE.search(last.content)
-        or _CONSOLIDATION_RE.search(last.content)
-    ):
-        session.turns[-1] = dataclasses.replace(last, content=_strip_memory_blocks(last.content))
+    if last.role == "assistant":
+        cleaned = _strip_memory_blocks(last.content)
+    else:
+        cleaned = last.content
+    if cleaned != last.content:
+        session.turns[-1] = dataclasses.replace(last, content=cleaned)
         await store.save(session)
 
 
@@ -1530,6 +1637,7 @@ __all__ = [
     "apply_memory_proposals",
     "apply_memory_forget",
     "forget_memories",
+    "delete_memories",
     "forget_prompt_memories",
     "apply_consolidation",
     "trim_memories",
@@ -1540,5 +1648,7 @@ __all__ = [
     "remember_user",
     "remember_preference",
     "clean_last_turn",
+    "is_simple_memory_prompt",
+    "should_inject_memory_instructions",
     "pop_last_exchange",
 ]

@@ -2,6 +2,21 @@
 
 All notable changes to `priests` are documented here.
 
+## [0.23.0] — 2026-05-10
+
+### Added
+- `/delete-memory <query>` and `POST /v1/profiles/{name}/memories/delete` permanently remove matching profile-scoped JSONL memory records, while `/forget <query>` remains soft supersession
+- Professional and stress live memory eval suites in `scripts/memory_eval.py`, with optional JSON reports and injected-memory budget measurements
+
+### Changed
+- Memory recall now defaults to a bounded prompt budget and simple greetings only inject minimal core memory instead of broad memory context or memory-writing instructions
+- Application-side memory guardrails now restrict priority `0`, downgrade ordinary preferences and time-sensitive facts, and correct common response-style preferences and meeting facts into the right memory kind
+- CLI, service, and docs now distinguish soft forget from hard delete without implying `/forget` physically removes audit data
+
+### Fixed
+- Hidden memory control blocks are stripped safely during streaming, including split tags, malformed blocks, multiple blocks, and persisted visible session history
+- Memory save/forget handling now tolerates malformed individual control blocks without corrupting memory state or aborting valid neighboring blocks
+
 ## [0.22.0] — 2026-05-10
 
 ### Changed

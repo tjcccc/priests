@@ -18,6 +18,7 @@ from priests.memory.extractor import (
     NOTES_FILE,
     PREFERENCES_FILE,
     PREFERENCES_JSONL_FILE,
+    StreamingStripper,
     USER_FILE,
     USER_JSONL_FILE,
     apply_memory_forget,
@@ -27,6 +28,7 @@ from priests.memory.extractor import (
     apply_consolidation,
     clean_last_turn,
     deduplicate_file,
+    delete_memories,
     extract_prompt_memories,
     forget_memories,
     forget_prompt_memories,
@@ -35,6 +37,7 @@ from priests.memory.extractor import (
     remember_user,
     save_memories,
     save_prompt_memories,
+    should_inject_memory_instructions,
     trim_memories,
 )
 
@@ -208,6 +211,52 @@ def test_save_memories_coerces_response_style_user_fact_to_preferences(tmp_path)
     row = _read_jsonl(tmp_path / PREFERENCES_JSONL_FILE)[0]
     assert row["kind"] == "preferences"
     assert "short" in row["text"]
+
+
+def test_save_memories_downgrades_priority_zero_preference(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "I prefer concise conversation replies.",
+                    "priority": 0,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                }
+            ]
+        },
+    )
+
+    row = _read_jsonl(tmp_path / PREFERENCES_JSONL_FILE)[0]
+    assert row["kind"] == "preferences"
+    assert row["priority"] == 2
+    assert row["conflict_key"] == "preferences.reply_style"
+
+
+def test_save_memories_downgrades_priority_zero_time_sensitive_fact(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "The user has a project meeting tomorrow at 9 a.m.",
+                    "priority": 0,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                }
+            ]
+        },
+    )
+
+    row = _read_jsonl(tmp_path / AUTO_JSONL_FILE)[0]
+    assert row["kind"] == "auto_short"
+    assert row["priority"] == 3
+    assert row["conflict_key"] == "auto_short.project_meeting_time"
 
 
 def test_save_memories_merges_duplicate_memory_with_best_priority(tmp_path):
@@ -533,6 +582,17 @@ def test_save_prompt_memories_ignores_memory_rejection(tmp_path):
     assert not (tmp_path / USER_JSONL_FILE).exists()
 
 
+def test_save_prompt_memories_extracts_chinese_reply_preference(tmp_path):
+    saved = save_prompt_memories(tmp_path, "我喜欢中文、简短的回答。")
+
+    assert saved == 1
+    row = _read_jsonl(tmp_path / PREFERENCES_JSONL_FILE)[0]
+    assert row["kind"] == "preferences"
+    assert row["conflict_key"] == "preferences.reply_style"
+    assert "中文" in row["text"]
+    assert "简短" in row["text"]
+
+
 def test_forget_memories_supersedes_by_conflict_key_and_prompt(tmp_path):
     save_prompt_memories(tmp_path, "My favorite color is green.")
     assert forget_memories(tmp_path, "user.favorite_color") == 1
@@ -566,6 +626,47 @@ def test_apply_memory_forget_accepts_payload_items(tmp_path):
     apply_memory_forget(tmp_path, {"forget": [{"query": "user.favorite_color"}]})
 
     assert _read_jsonl(tmp_path / USER_JSONL_FILE)[0]["status"] == "superseded"
+
+
+def test_delete_memories_removes_matching_jsonl_records(tmp_path):
+    save_prompt_memories(tmp_path, "My favorite color is green.")
+    save_prompt_memories(tmp_path, "My favorite editor is Neovim.")
+
+    assert delete_memories(tmp_path, "user.favorite_color") == 1
+
+    rows = _read_jsonl(tmp_path / USER_JSONL_FILE)
+    assert len(rows) == 1
+    assert "Neovim" in rows[0]["text"]
+    assert "green" not in "\n".join(row["text"] for row in rows)
+
+
+def test_delete_memories_profile_isolation(tmp_path):
+    profile_a = tmp_path / "a"
+    profile_b = tmp_path / "b"
+    save_prompt_memories(profile_a, "My favorite color is green.")
+    save_prompt_memories(profile_b, "My favorite color is yellow.")
+
+    assert delete_memories(profile_a, "user.favorite_color") == 1
+
+    assert _read_jsonl(profile_a / USER_JSONL_FILE) == []
+    assert "yellow" in _read_jsonl(profile_b / USER_JSONL_FILE)[0]["text"]
+
+
+def test_delete_memories_preserves_malformed_jsonl_lines(tmp_path):
+    path = tmp_path / USER_JSONL_FILE
+    path.write_text(
+        '{"kind":"user","text":"The user favorite color is green.","conflict_key":"user.favorite_color"}\n'
+        '{"kind":"user","text":"broken"\n'
+        '{"kind":"user","text":"The user favorite editor is Neovim.","conflict_key":"user.favorite_editor"}\n',
+        encoding="utf-8",
+    )
+
+    assert delete_memories(tmp_path, "user.favorite_color") == 1
+
+    text = path.read_text(encoding="utf-8")
+    assert '{"kind":"user","text":"broken"' in text
+    assert "favorite_color" not in text
+    assert "favorite_editor" in text
 
 
 # ---------------------------------------------------------------------------
@@ -763,6 +864,81 @@ def test_assemble_memory_entries_ranks_relevant_memory_within_priority(tmp_path)
     assert combined.index("Python examples") < combined.index("Go examples")
 
 
+def _stream_visible(chunks: list[str]) -> tuple[str, StreamingStripper]:
+    stripper = StreamingStripper()
+    visible = "".join(stripper.feed(chunk) for chunk in chunks)
+    visible += stripper.flush()
+    return visible, stripper
+
+
+def test_streaming_stripper_handles_split_memory_blocks():
+    visible, stripper = _stream_visible(
+        [
+            "Before <memo",
+            'ry_save>{"memories":[{"kind":"user","text":"hidden"}]}',
+            "</memory_",
+            "save> after.",
+        ]
+    )
+
+    assert visible == "Before  after."
+    assert "<memory_save>" not in visible
+    assert len(stripper.save_jsons) == 1
+    assert "hidden" in stripper.save_jsons[0]
+
+
+def test_streaming_stripper_handles_multiple_hidden_blocks():
+    visible, stripper = _stream_visible(
+        [
+            'A <memory_save>{"memories":[{"kind":"user","text":"one"}]}</memory_save>',
+            ' B <memory_forget>{"query":"user.name"}</memory_forget> C',
+            ' <memory_save>{"memories":[{"kind":"preferences","text":"two"}]}</memory_save>',
+        ]
+    )
+
+    assert visible == "A  B  C "
+    assert len(stripper.save_jsons) == 2
+    assert len(stripper.forget_jsons) == 1
+    assert "one" in stripper.save_jsons[0]
+    assert "two" in stripper.save_jsons[1]
+
+
+def test_streaming_stripper_discards_malformed_hidden_block():
+    visible, stripper = _stream_visible(["Visible. <memory_save>{not json"])
+
+    assert visible == "Visible. "
+    assert "{not json" in stripper.save_jsons[0]
+
+
+def test_simple_prompt_recalls_only_core_memory_and_skips_policy(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "The user's name is Jack.",
+                    "priority": 0,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                    "conflict_key": "user.name",
+                },
+                {"kind": "preferences", "text": "The user prefers Python examples.", "priority": 2},
+                {"kind": "auto_short", "text": "The user has a meeting tomorrow at 9 a.m.", "priority": 3},
+            ]
+        },
+    )
+
+    combined = "\n".join(assemble_memory_entries(tmp_path, prompt="hello"))
+
+    assert "Jack" in combined
+    assert "Python examples" not in combined
+    assert "meeting" not in combined
+    assert should_inject_memory_instructions("hello") is False
+    assert should_inject_memory_instructions("What is my favorite editor?") is True
+
+
 # ---------------------------------------------------------------------------
 # deduplicate_file
 # ---------------------------------------------------------------------------
@@ -830,6 +1006,20 @@ async def test_clean_last_turn_strips_memory_block():
     saved: _Session = store.save.call_args[0][0]
     assert "<memory_save>" not in saved.turns[-1].content
     assert "Here is the answer." in saved.turns[-1].content
+
+
+async def test_clean_last_turn_strips_malformed_memory_block():
+    turn = _Turn(role="assistant", content="Visible first. <memory_save>{bad json")
+    session = _Session(turns=[turn])
+    store = MagicMock()
+    store.get = AsyncMock(return_value=session)
+    store.save = AsyncMock()
+
+    await clean_last_turn(store, "session-1")
+
+    store.save.assert_called_once()
+    saved: _Session = store.save.call_args[0][0]
+    assert saved.turns[-1].content == "Visible first. "
 
 
 async def test_clean_last_turn_no_tags_does_not_save():

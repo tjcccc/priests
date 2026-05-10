@@ -31,6 +31,18 @@ def _parse_bool(value: str | None) -> bool | None:
     if value.lower() in ("false", "0", "no"):
         return False
     raise typer.BadParameter(f"Expected true or false, got {value!r}")
+
+
+def _iter_json_payloads(payloads: list[str]):
+    import json
+
+    for payload_text in payloads:
+        try:
+            yield json.loads(payload_text)
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+
 console = Console()
 err_console = Console(stderr=True)
 
@@ -102,6 +114,7 @@ async def _run_single(
         append_memories, apply_memory_forget, apply_memory_proposals, save_memories,
         save_prompt_memories, trim_memories, forget_prompt_memories,
         deduplicate_file, assemble_memory_entries, build_memory_instructions,
+        should_inject_memory_instructions,
         USER_FILE, PREFERENCES_FILE,
     )
     from priests.profile.config import load_profile_config
@@ -120,7 +133,8 @@ async def _run_single(
     if memories:
         deduplicate_file(memories_dir / USER_FILE)
         deduplicate_file(memories_dir / PREFERENCES_FILE)
-        turn_context.append(build_memory_instructions())
+        if should_inject_memory_instructions(prompt):
+            turn_context.append(build_memory_instructions())
 
     session_ref = None
     if session_id:
@@ -169,14 +183,14 @@ async def _run_single(
 
     if memories:
         try:
-            if stripper.save_json:
-                save_memories(memories_dir, json.loads(stripper.save_json), session_id=session_id)
-            if stripper.append_json:
-                append_memories(memories_dir, json.loads(stripper.append_json), session_id=session_id)
-            if stripper.proposal_json:
-                apply_memory_proposals(memories_dir, json.loads(stripper.proposal_json), session_id=session_id)
-            if stripper.forget_json:
-                apply_memory_forget(memories_dir, json.loads(stripper.forget_json), session_id=session_id)
+            for payload in _iter_json_payloads(stripper.save_jsons):
+                save_memories(memories_dir, payload, session_id=session_id)
+            for payload in _iter_json_payloads(stripper.append_jsons):
+                append_memories(memories_dir, payload, session_id=session_id)
+            for payload in _iter_json_payloads(stripper.proposal_jsons):
+                apply_memory_proposals(memories_dir, payload, session_id=session_id)
+            for payload in _iter_json_payloads(stripper.forget_jsons):
+                apply_memory_forget(memories_dir, payload, session_id=session_id)
             forget_prompt_memories(memories_dir, prompt, session_id=session_id)
             save_prompt_memories(memories_dir, prompt, session_id=session_id)
             trim_memories(memories_dir, size_limit)
@@ -273,7 +287,8 @@ _CHAT_HELP = """\
   [bold]/remember[/bold] [dim]<text>[/dim]       Save text to short-term memory (auto_short.jsonl).
   [bold]/remember user[/bold] [dim]<text>[/dim]  Save approved durable user memory (user.jsonl).
   [bold]/remember pref[/bold] [dim]<text>[/dim]  Save approved durable preference memory (preferences.jsonl).
-  [bold]/forget[/bold] [dim]<query>[/dim]        Supersede matching active memory by text or conflict key.
+  [bold]/forget[/bold] [dim]<query>[/dim]        Soft-forget matching active memory by superseding it.
+  [bold]/delete-memory[/bold] [dim]<query>[/dim] Permanently remove matching JSONL memory records.
   [bold]/help[/bold]              Show this message.\
 """
 
@@ -300,6 +315,7 @@ async def _run_chat(
         save_prompt_memories, trim_memories, forget_memories, forget_prompt_memories,
         deduplicate_file, assemble_memory_entries, build_memory_instructions,
         remember_short, remember_user, remember_preference,
+        delete_memories, should_inject_memory_instructions,
         USER_FILE, PREFERENCES_FILE,
     )
     from priests.profile.config import load_profile_config
@@ -515,7 +531,24 @@ async def _run_chat(
                         err_console.print("[yellow]Memories are disabled for this profile.[/yellow]")
                     else:
                         count = forget_memories(memories_dir, query)
-                        console.print(f"[dim]Forgot {count} matching memory entr{'y' if count == 1 else 'ies'}.[/dim]")
+                        console.print(
+                            f"[dim]Soft-forgot {count} matching memory entr{'y' if count == 1 else 'ies'} "
+                            "by marking them superseded.[/dim]"
+                        )
+                    continue
+
+                elif raw.lower().startswith("/delete-memory "):
+                    query = raw[len("/delete-memory "):].strip()
+                    if not query:
+                        err_console.print("[yellow]Usage:[/yellow] /delete-memory <query>")
+                    elif not memories_on:
+                        err_console.print("[yellow]Memories are disabled for this profile.[/yellow]")
+                    else:
+                        count = delete_memories(memories_dir, query)
+                        console.print(
+                            f"[dim]Permanently deleted {count} matching JSONL memory "
+                            f"record{'s' if count != 1 else ''}.[/dim]"
+                        )
                     continue
 
                 elif raw.lower().startswith("/remember user "):
@@ -557,7 +590,9 @@ async def _run_chat(
 
             # --- Build turn system context ---
             if memories_on:
-                turn_context = [*context_base, build_memory_instructions()]
+                turn_context = [*context_base]
+                if should_inject_memory_instructions(raw):
+                    turn_context.append(build_memory_instructions())
                 turn_memory = assemble_memory_entries(
                     memories_dir,
                     config.memory.context_limit,
@@ -712,14 +747,14 @@ async def _run_chat(
 
             if memories_on:
                 try:
-                    if stripper.save_json:
-                        save_memories(memories_dir, json.loads(stripper.save_json), session_id=sid)
-                    if stripper.append_json:
-                        append_memories(memories_dir, json.loads(stripper.append_json), session_id=sid)
-                    if stripper.proposal_json:
-                        apply_memory_proposals(memories_dir, json.loads(stripper.proposal_json), session_id=sid)
-                    if stripper.forget_json:
-                        apply_memory_forget(memories_dir, json.loads(stripper.forget_json), session_id=sid)
+                    for payload in _iter_json_payloads(stripper.save_jsons):
+                        save_memories(memories_dir, payload, session_id=sid)
+                    for payload in _iter_json_payloads(stripper.append_jsons):
+                        append_memories(memories_dir, payload, session_id=sid)
+                    for payload in _iter_json_payloads(stripper.proposal_jsons):
+                        apply_memory_proposals(memories_dir, payload, session_id=sid)
+                    for payload in _iter_json_payloads(stripper.forget_jsons):
+                        apply_memory_forget(memories_dir, payload, session_id=sid)
                     forget_prompt_memories(memories_dir, raw, session_id=sid)
                     save_prompt_memories(memories_dir, raw, session_id=sid)
                     trim_memories(memories_dir, size_limit)

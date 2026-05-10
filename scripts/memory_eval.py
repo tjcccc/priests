@@ -88,10 +88,11 @@ class StepResult:
     passed: bool
     failures: list[str]
     save_blocks: int
+    injected_memory_chars: int
     memory_rows: list[dict[str, Any]]
 
 
-def _cases() -> list[EvalStep]:
+def _smoke_cases() -> list[EvalStep]:
     return [
         EvalStep(
             name="save_meeting",
@@ -99,7 +100,7 @@ def _cases() -> list[EvalStep]:
             memory=(
                 MemoryCheck(
                     kind="auto_short",
-                    all_of=(r"\bproject\b", r"\bmeeting\b", TIME_3_PM, r"(tomorrow|2026-05-10|may\s+10)"),
+                    all_of=(r"\bproject\b", r"\bmeeting\b", TIME_3_PM, r"(tomorrow|2026-05-11|may\s+11)"),
                     description="project meeting tomorrow at 3 p.m. saved as short-term memory",
                     max_priority=3,
                     min_confidence=0.6,
@@ -247,6 +248,9 @@ def _cases() -> list[EvalStep]:
                     r"\bdo not have access to your name\b",
                     r"\bdo not have any information stored about your name\b",
                     r"\bdo not have\b.*\bname\b",
+                    r"\bdon't have\b.*\bmemory\b.*\bname\b",
+                    r"\bdo not have\b.*\bmemory\b.*\bname\b",
+                    r"\bdo not seem to have\b.*\bmemory\b.*\bname\b",
                     r"\bdon't seem to have\b.*\bname\b.*\b(saved|stored)\b",
                     r"\bno record\b",
                 ),
@@ -255,6 +259,87 @@ def _cases() -> list[EvalStep]:
             ),
         ),
     ]
+
+
+def _professional_cases() -> list[EvalStep]:
+    return [
+        *_smoke_cases(),
+        EvalStep(
+            name="no_save_private",
+            prompt="Do not remember this: my passport number is X1234567.",
+            forbidden_memory=(
+                ForbiddenMemoryCheck(
+                    kind=None,
+                    pattern=r"(passport|X1234567)",
+                    description="explicit no-save private data must not be saved",
+                ),
+            ),
+        ),
+        EvalStep(
+            name="multilingual_preference",
+            prompt="Memory test: 我喜欢中文、简短的回答。",
+            memory=(
+                MemoryCheck(
+                    kind="preferences",
+                    all_of=(r"(中文|Chinese)", r"(简短|short|brief|concise)"),
+                    description="Chinese concise-answer preference saved as preference memory",
+                    max_priority=3,
+                    min_confidence=0.6,
+                ),
+            ),
+        ),
+        EvalStep(
+            name="forget_color",
+            prompt="Please forget my favorite color.",
+            forbidden_memory=(
+                ForbiddenMemoryCheck(
+                    kind="user",
+                    pattern=r"\bgreen\b",
+                    description="favorite color should no longer remain active after forget",
+                ),
+            ),
+        ),
+        EvalStep(
+            name="recall_forgotten_color",
+            prompt="What is my favorite color?",
+            reply=ReplyCheck(
+                any_of=(
+                    r"\b(do not|don't|not)\s+know\b",
+                    r"\bforgot\b",
+                    r"\bno\s+(?:active\s+)?record\b",
+                    r"\byou asked me to forget\b",
+                    r"\bdon't have\b.*\bstored\b.*\bfavou?rite color\b",
+                    r"\bdo not have\b.*\bstored\b.*\bfavou?rite color\b",
+                    r"\bdon't have\b.*\bmemory\b.*\bfavou?rite color\b",
+                    r"\bdo not have\b.*\bmemory\b.*\bfavou?rite color\b",
+                    r"\bdon't recall\b.*\bfavou?rite color\b",
+                    r"\bdo not recall\b.*\bfavou?rite color\b",
+                ),
+                none_of=(r"\bgreen\b", r"\byellow\b"),
+                description="does not recall soft-forgotten favorite color",
+            ),
+        ),
+    ]
+
+
+def _stress_cases() -> list[EvalStep]:
+    distractors = [
+        EvalStep(
+            name=f"distractor_math_{idx}",
+            prompt=f"Unrelated check {idx}: answer with only the number {idx}.",
+            reply=ReplyCheck(all_of=(rf"\b{idx}\b",), description="answers cheap unrelated prompt without memory drag"),
+        )
+        for idx in range(1, 11)
+    ]
+    return [*_professional_cases(), *distractors]
+
+
+def _cases(suite: str) -> list[EvalStep]:
+    if suite == "stress":
+        return _stress_cases()
+    if suite == "professional":
+        return _professional_cases()
+    return _smoke_cases()
 
 
 def _matches(pattern: str, text: str) -> bool:
@@ -455,7 +540,7 @@ async def run_eval(args: argparse.Namespace) -> tuple[list[StepResult], Path]:
 
     base_context = [
         "Running priests live memory evaluation.",
-        "For this evaluation, today's date is 2026-05-09. Tomorrow is 2026-05-10.",
+        "For this evaluation, today's date is 2026-05-10. Tomorrow is 2026-05-11.",
         "When the user provides a fact worth remembering, follow the memory policy exactly.",
         "Explicit user facts and preferences in memory-test prompts are worth remembering.",
         'Every prompt beginning with "Memory test:" contains a fact or preference that must be saved with memory_save.',
@@ -470,7 +555,13 @@ async def run_eval(args: argparse.Namespace) -> tuple[list[StepResult], Path]:
     results: list[StepResult] = []
 
     async with store:
-        for step in _cases():
+        for step in _cases(args.suite):
+            memory_context = assemble_memory_entries(
+                memories_dir,
+                args.context_limit,
+                thinking=args.thinking,
+                prompt=step.prompt,
+            )
             request = PriestRequest(
                 config=PriestConfig(
                     provider=args.provider,
@@ -484,12 +575,7 @@ async def run_eval(args: argparse.Namespace) -> tuple[list[StepResult], Path]:
                 prompt=step.prompt,
                 session=SessionRef(id=session_id, create_if_missing=True),
                 context=base_context,
-                memory=assemble_memory_entries(
-                    memories_dir,
-                    args.context_limit,
-                    thinking=args.thinking,
-                    prompt=step.prompt,
-                ),
+                memory=memory_context,
             )
             response = await engine.run(request)
             if response.error:
@@ -525,6 +611,7 @@ async def run_eval(args: argparse.Namespace) -> tuple[list[StepResult], Path]:
                 passed=not failures,
                 failures=failures,
                 save_blocks=save_blocks,
+                injected_memory_chars=len("\n\n".join(memory_context)),
                 memory_rows=rows,
             )
             results.append(result)
@@ -546,6 +633,7 @@ def _print_report(results: list[StepResult], root: Path, verbose: bool) -> None:
         print(f"    prompt: {result.prompt}")
         print(f"    reply:  {result.response}")
         print(f"    memory write batches applied: {result.save_blocks}")
+        print(f"    injected memory chars: {result.injected_memory_chars}")
         if result.failures:
             for failure in result.failures:
                 print(f"    - {failure}")
@@ -579,6 +667,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keep", action="store_true", help="Keep the eval workspace after the run.")
     parser.add_argument("--verbose", action="store_true", help="Print active memory rows after every step.")
     parser.add_argument("--stop-on-fail", action="store_true", help="Stop at the first failed step.")
+    parser.add_argument("--suite", choices=("smoke", "professional", "stress"), default="smoke", help="Eval suite to run.")
+    parser.add_argument("--json-report", default=None, help="Optional path to write a JSON result report.")
     parser.add_argument("--thinking", action="store_true", help="Enable thinking mode and recall priority 0..10.")
     parser.add_argument("--context-limit", type=int, default=12000, help="Memory context character budget.")
     parser.add_argument("--size-limit", type=int, default=50000, help="auto_short.jsonl character budget.")
@@ -594,6 +684,24 @@ def main() -> int:
     try:
         results, root = asyncio.run(run_eval(args))
         _print_report(results, root, args.verbose)
+        if args.json_report:
+            report_path = Path(args.json_report).expanduser()
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "suite": args.suite,
+                        "workspace": str(root),
+                        "passed": sum(1 for result in results if result.passed),
+                        "total": len(results),
+                        "results": [dataclasses.asdict(result) for result in results],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         return 0 if all(result.passed for result in results) else 1
     finally:
         if root is not None and not args.keep and args.workdir is None:

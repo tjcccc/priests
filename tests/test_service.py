@@ -36,10 +36,10 @@ async def _agen(*chunks: str):
 
 
 def _make_app():
-    """Create the FastAPI app from the real config."""
-    from priests.config.loader import load_config
+    """Create the FastAPI app from an isolated default config."""
+    from priests.config.model import AppConfig
     from priests.service.app import create_app
-    return create_app(load_config())
+    return create_app(AppConfig.model_validate({"default": {"provider": "ollama", "model": "test"}}))
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +273,7 @@ def test_run_assembles_profile_memory_into_request_memory(client, tmp_path):
     c.app.state.config.default.think = True
     engine.run.return_value = _ok_response("memory")
 
-    resp = c.post("/v1/run", json={"prompt": "hi", "profile": "coder"})
+    resp = c.post("/v1/run", json={"prompt": "What should you remember about this profile?", "profile": "coder"})
 
     assert resp.status_code == 200
     call_request = engine.run.call_args[0][0]
@@ -283,6 +283,44 @@ def test_run_assembles_profile_memory_into_request_memory(client, tmp_path):
     assert "Legacy fact." in combined
     assert "Short fact." in combined
     assert any("Memory policy for priests" in ctx for ctx in call_request.context)
+
+
+def test_run_simple_prompt_skips_broad_memory_context(client, tmp_path):
+    from priests.memory.extractor import save_memories
+
+    c, engine, _ = client
+    profile_dir = tmp_path / "coder"
+    memories_dir = profile_dir / "memories"
+    memories_dir.mkdir(parents=True)
+    (profile_dir / "profile.toml").write_text("memories = true\n")
+    save_memories(
+        memories_dir,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "The user's name is Jack.",
+                    "priority": 0,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                    "conflict_key": "user.name",
+                },
+                {"kind": "preferences", "text": "The user prefers Python examples.", "priority": 2},
+            ]
+        },
+    )
+    c.app.state.config.paths.profiles_dir = tmp_path
+    engine.run.return_value = _ok_response("hello")
+
+    resp = c.post("/v1/run", json={"prompt": "hello", "profile": "coder"})
+
+    assert resp.status_code == 200
+    call_request = engine.run.call_args[0][0]
+    assert not any("Memory policy for priests" in ctx for ctx in call_request.context)
+    combined = "\n".join(call_request.memory)
+    assert "Jack" in combined
+    assert "Python examples" not in combined
 
 
 def test_profile_api_reads_and_writes_model_override(client, tmp_path):
@@ -326,6 +364,25 @@ def test_profile_api_create_scaffolds_memory_files(client, tmp_path):
     assert (memories_dir / "user.md").exists()
     assert (memories_dir / "preferences.md").exists()
     assert (memories_dir / "auto_short.md").exists()
+
+
+def test_profile_memory_delete_api_is_profile_scoped(client, tmp_path):
+    from priests.memory.extractor import USER_JSONL_FILE, save_prompt_memories
+
+    c, _, _ = client
+    c.app.state.config.paths.profiles_dir = tmp_path
+    for name, color in (("coder", "green"), ("writer", "yellow")):
+        profile_dir = tmp_path / name
+        profile_dir.mkdir(parents=True)
+        (profile_dir / "profile.toml").write_text("memories = true\n")
+        save_prompt_memories(profile_dir / "memories", f"My favorite color is {color}.")
+
+    resp = c.post("/v1/profiles/coder/memories/delete", json={"query": "user.favorite_color"})
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] == 1
+    assert (tmp_path / "coder" / "memories" / USER_JSONL_FILE).read_text() == ""
+    assert "yellow" in (tmp_path / "writer" / "memories" / USER_JSONL_FILE).read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +454,25 @@ def test_run_stream_filters_memory_blocks(client):
     full_text = "".join(p["delta"] for p in parsed if "delta" in p)
     assert "<memory_append>" not in full_text
     assert "Answer." in full_text
+
+
+def test_run_stream_filters_split_memory_save_blocks(client):
+    c, engine, _ = client
+    engine.stream = MagicMock(return_value=_agen(
+        "Visible <mem",
+        'ory_save>{"memories":[{"kind":"user","text":"hidden"}]}',
+        "</memory_",
+        "save> text",
+    ))
+    resp = c.post("/v1/run/stream?memories=false", json={"prompt": "hi"})
+    assert resp.status_code == 200
+    lines = [l for l in resp.text.splitlines() if l.startswith("data:")]
+    payloads = [l[len("data: "):] for l in lines]
+    parsed = [json.loads(p) for p in payloads if p != "[DONE]"]
+    full_text = "".join(p["delta"] for p in parsed if "delta" in p)
+    assert full_text == "Visible  text"
+    assert "memory_save" not in full_text
+    assert "hidden" not in full_text
 
 
 def test_run_stream_error_yields_error_event(client):

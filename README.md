@@ -110,6 +110,8 @@ Inside `priests run` interactive mode:
 | `/remember <text>` | Save text directly to short-term memory (`auto_short.jsonl`) |
 | `/remember user <text>` | Save approved durable user memory (`user.jsonl`) |
 | `/remember pref <text>` | Save approved durable preference memory (`preferences.jsonl`) |
+| `/forget <query>` | Soft-forget matching active memory by superseding it |
+| `/delete-memory <query>` | Permanently delete matching JSONL memory records |
 | `/exit` | Exit the chat |
 
 Ctrl+J inserts a newline. Enter submits.
@@ -190,6 +192,7 @@ use_proxy = true
 
 [memory]
 size_limit = 50000  # max characters in auto_short.jsonl; 0 = unlimited
+context_limit = 2400  # max memory chars injected per turn; 0 = explicit unlimited
 ```
 
 ### Proxy
@@ -279,16 +282,18 @@ Profile files and memory files have different authority:
 
 Legacy `memories/notes.md` is still read if present, but priests treats it as read-only legacy memory and no longer writes to it automatically.
 
-Each JSONL memory entry stores text plus metadata such as `priority`, `confidence`, `stability`, `source`, timestamps, optional `conflict_key`, and supersession status. Priority `0` is highest and is reserved for rare, stable facts such as the user's name.
+Each JSONL memory entry stores text plus metadata such as `priority`, `confidence`, `stability`, `source`, timestamps, optional `conflict_key`, and supersession status. Storage is intentionally richer than prompt injection: normal prompts receive compact natural-language bullets, not full JSON metadata. Memory is context, not authority; human-authored profile files and the current user message outrank it.
+
+Priority `0` is highest and is reserved for rare, explicit, stable identity facts such as the user's name. Application code downgrades ordinary preferences and time-sensitive facts that a model tries to save as priority `0`.
 
 | Policy | Behavior |
 |--------|----------|
 | Auto-applied short-term | Structured `auto_short` entries |
 | Auto-applied durable | Structured `user` / `preferences` entries |
-| Recall budget | Normal mode recalls priority `0..3`; thinking mode recalls priority `0..10`; `memory.context_limit` is the final hard budget |
+| Recall budget | Normal mode recalls priority `0..3`; thinking mode recalls priority `0..10`; simple greetings recall only priority `0`; `memory.context_limit` is the final hard budget |
 | Never auto-written | `PROFILE.md`, `RULES.md`, `CUSTOM.md`, `profile.toml`, legacy `notes.md` |
 
-The model emits hidden `<memory_save>{...}</memory_save>` JSON blocks for saves and `<memory_forget>{...}</memory_forget>` blocks for explicit deletion requests. priests strips those blocks from visible replies, validates the structured entries, deduplicates exact matches, canonicalizes compatible conflict-key aliases, supersedes matching open-schema `conflict_key` slots such as `user.favorite_color`, and trims low-priority short-term entries once `auto_short.jsonl` exceeds `memory.size_limit`.
+The model emits hidden `<memory_save>{...}</memory_save>` JSON blocks for saves and `<memory_forget>{...}</memory_forget>` blocks for explicit forget requests. priests strips those blocks from visible replies and visible session history, including streaming responses where tags may be split across chunks. It validates the structured entries, deduplicates exact matches, canonicalizes compatible conflict-key aliases, supersedes matching open-schema `conflict_key` slots such as `user.favorite_color`, and trims low-priority short-term entries once `auto_short.jsonl` exceeds `memory.size_limit`.
 
 As a reliability backstop, priests also applies conservative code-side extraction for explicit high-value facts in the user prompt, such as names, favorite/preferred values, response-style preferences, and meeting times. This keeps memory behavior consistent across profiles and smaller models even when the model forgets to emit a hidden save block.
 
@@ -298,16 +303,19 @@ Interactive chat includes explicit controls:
 /remember <text>       Save short-term memory
 /remember user <text>  Save durable user memory
 /remember pref <text>  Save durable preference memory
-/forget <query>        Supersede active memory by text or conflict key
+/forget <query>        Soft-forget active memory by text or conflict key
+/delete-memory <query> Permanently delete matching JSONL memory records
 ```
+
+`/forget` preserves the JSONL audit trail by marking matching active records as `superseded`, so they are excluded from recall but remain inspectable. `/delete-memory` physically removes matching structured JSONL records for the current profile. Legacy `.md` memory files are read-only fallback inputs and must be edited manually if they contain matching text.
 
 Run the live memory eval against a local model:
 
 ```bash
-uv run python scripts/memory_eval.py --provider ollama --model gemma4:e4b --keep --verbose
+uv run python scripts/memory_eval.py --provider ollama --model gemma4:e4b --suite professional --json-report /tmp/priests-memory-eval.json --keep --verbose
 ```
 
-The eval creates a temporary profile/session, sends a fixed prompt sequence, checks both visible replies and JSONL memory state, and exits non-zero when any case fails.
+The eval creates a temporary profile/session, sends a fixed prompt sequence, checks both visible replies and JSONL memory state, reports injected memory chars, and exits non-zero when any case fails. Use pytest as the hard deterministic gate; the live eval is release evidence for model cooperation.
 
 To disable memory for a single run:
 
@@ -348,6 +356,7 @@ GET  /v1/providers/{name}/models    list available models for a provider
 GET  /v1/profiles                   list profiles
 GET  /v1/profiles/{name}            get profile files
 PUT  /v1/profiles/{name}            update profile files
+POST /v1/profiles/{name}/memories/delete  permanently delete matching JSONL memory
 POST /v1/profiles                   create profile
 POST /v1/profiles/{name}/rename     rename profile
 DELETE /v1/profiles/{name}          delete profile

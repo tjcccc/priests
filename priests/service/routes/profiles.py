@@ -8,6 +8,8 @@ import tomli_w
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from priests.memory.extractor import delete_memories
+
 try:
     import tomllib
 except ImportError:
@@ -59,6 +61,15 @@ class CreateProfileIn(BaseModel):
 
 class RenameProfileIn(BaseModel):
     new_name: str
+
+
+class DeleteMemoryIn(BaseModel):
+    query: str
+    kind: str | None = None
+
+
+class DeleteMemoryOut(BaseModel):
+    deleted: int
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +139,19 @@ async def update_profile(name: str, body: ProfileFilesIn, request: Request) -> N
             else:
                 existing.pop("model", None)
         toml_path.write_bytes(tomli_w.dumps(existing).encode())
+
+
+@router.post("/profiles/{name}/memories/delete", response_model=DeleteMemoryOut)
+async def delete_profile_memory(name: str, body: DeleteMemoryIn, request: Request) -> DeleteMemoryOut:
+    _check_name(name)
+    d = _profiles_dir(request) / name
+    if not d.exists():
+        raise HTTPException(status_code=404, detail=f"Profile {name!r} not found")
+    query = body.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Memory delete query is required")
+    deleted = delete_memories(d / "memories", query, kind=body.kind)
+    return DeleteMemoryOut(deleted=deleted)
 
 
 @router.post("/profiles", status_code=201)

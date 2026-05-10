@@ -25,6 +25,7 @@ from priests.memory.extractor import (
     forget_prompt_memories,
     save_memories,
     save_prompt_memories,
+    should_inject_memory_instructions,
     trim_memories,
 )
 from priests.profile.config import load_profile_config, resolve_provider_model
@@ -48,12 +49,18 @@ _COPILOT_REFRESH_SKEW_SECONDS = 300
 
 
 def _strip_memory_blocks(text: str) -> str:
-    text = _SAVE_RE.sub("", text)
-    text = _APPEND_RE.sub("", text)
-    text = _PROPOSAL_RE.sub("", text)
-    text = _FORGET_RE.sub("", text)
-    text = _CONSOLIDATION_RE.sub("", text)
-    return text
+    stripper = StreamingStripper()
+    return stripper.feed(text) + stripper.flush()
+
+
+def _json_payloads(*payloads: str | None):
+    for payload_text in payloads:
+        if not payload_text:
+            continue
+        try:
+            yield json.loads(payload_text)
+        except (json.JSONDecodeError, ValueError):
+            continue
 
 
 def _build_images(body: RunRequest, extra: list[tuple[bytes, str]] | None = None) -> list[ImageInput]:
@@ -108,7 +115,8 @@ def _build_priest_request(
     request_memory = list(body.memory)
     if memories_enabled:
         memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
-        base_context.append(build_memory_instructions())
+        if should_inject_memory_instructions(body.prompt):
+            base_context.append(build_memory_instructions())
         request_memory.extend(
             assemble_memory_entries(
                 memories_dir,
@@ -237,6 +245,8 @@ async def _apply_memory(
     if response.session:
         await clean_last_turn(store, response.session.id)
     text = response.text or ""
+    stripper = StreamingStripper()
+    visible_text = stripper.feed(text) + stripper.flush()
     if memories:
         profile_cfg = load_profile_config(config.paths.profiles_dir, body.profile)
         if profile_cfg.memories:
@@ -246,42 +256,15 @@ async def _apply_memory(
                 else config.memory.size_limit
             )
             memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
-            if m := _SAVE_RE.search(text):
-                try:
-                    save_memories(
-                        memories_dir,
-                        json.loads(m.group(1).strip()),
-                        session_id=response.session.id if response.session else body.session_id,
-                    )
-                except (json.JSONDecodeError, ValueError):
-                    pass
-            if m := _APPEND_RE.search(text):
-                try:
-                    append_memories(
-                        memories_dir,
-                        json.loads(m.group(1).strip()),
-                        session_id=response.session.id if response.session else body.session_id,
-                    )
-                except (json.JSONDecodeError, ValueError):
-                    pass
-            if m := _PROPOSAL_RE.search(text):
-                try:
-                    apply_memory_proposals(
-                        memories_dir,
-                        json.loads(m.group(1).strip()),
-                        session_id=response.session.id if response.session else body.session_id,
-                    )
-                except (json.JSONDecodeError, ValueError):
-                    pass
-            if m := _FORGET_RE.search(text):
-                try:
-                    apply_memory_forget(
-                        memories_dir,
-                        json.loads(m.group(1).strip()),
-                        session_id=response.session.id if response.session else body.session_id,
-                    )
-                except (json.JSONDecodeError, ValueError):
-                    pass
+            session_id = response.session.id if response.session else body.session_id
+            for payload in _json_payloads(*stripper.save_jsons):
+                save_memories(memories_dir, payload, session_id=session_id)
+            for payload in _json_payloads(*stripper.append_jsons):
+                append_memories(memories_dir, payload, session_id=session_id)
+            for payload in _json_payloads(*stripper.proposal_jsons):
+                apply_memory_proposals(memories_dir, payload, session_id=session_id)
+            for payload in _json_payloads(*stripper.forget_jsons):
+                apply_memory_forget(memories_dir, payload, session_id=session_id)
             forget_prompt_memories(
                 memories_dir,
                 body.prompt,
@@ -293,7 +276,7 @@ async def _apply_memory(
                 session_id=response.session.id if response.session else body.session_id,
             )
             trim_memories(memories_dir, size_limit)
-    return response.model_copy(update={"text": _strip_memory_blocks(text)})
+    return response.model_copy(update={"text": visible_text})
 
 
 def _model_label(req) -> str:
@@ -414,26 +397,14 @@ async def _sse_generator(body: RunRequest, request: Request, memories: bool):
                 else config.memory.size_limit
             )
             memories_dir = config.paths.profiles_dir.expanduser() / body.profile / "memories"
-            if stripper.save_json:
-                try:
-                    save_memories(memories_dir, json.loads(stripper.save_json), session_id=body.session_id)
-                except (json.JSONDecodeError, ValueError):
-                    pass
-            if stripper.append_json:
-                try:
-                    append_memories(memories_dir, json.loads(stripper.append_json), session_id=body.session_id)
-                except (json.JSONDecodeError, ValueError):
-                    pass
-            if stripper.proposal_json:
-                try:
-                    apply_memory_proposals(memories_dir, json.loads(stripper.proposal_json), session_id=body.session_id)
-                except (json.JSONDecodeError, ValueError):
-                    pass
-            if stripper.forget_json:
-                try:
-                    apply_memory_forget(memories_dir, json.loads(stripper.forget_json), session_id=body.session_id)
-                except (json.JSONDecodeError, ValueError):
-                    pass
+            for payload in _json_payloads(*stripper.save_jsons):
+                save_memories(memories_dir, payload, session_id=body.session_id)
+            for payload in _json_payloads(*stripper.append_jsons):
+                append_memories(memories_dir, payload, session_id=body.session_id)
+            for payload in _json_payloads(*stripper.proposal_jsons):
+                apply_memory_proposals(memories_dir, payload, session_id=body.session_id)
+            for payload in _json_payloads(*stripper.forget_jsons):
+                apply_memory_forget(memories_dir, payload, session_id=body.session_id)
             forget_prompt_memories(memories_dir, body.prompt, session_id=body.session_id)
             save_prompt_memories(memories_dir, body.prompt, session_id=body.session_id)
             trim_memories(memories_dir, size_limit)
