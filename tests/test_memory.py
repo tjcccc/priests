@@ -20,16 +20,21 @@ from priests.memory.extractor import (
     PREFERENCES_JSONL_FILE,
     USER_FILE,
     USER_JSONL_FILE,
+    apply_memory_forget,
     apply_memory_proposals,
     assemble_memory_entries,
     append_memories,
     apply_consolidation,
     clean_last_turn,
     deduplicate_file,
+    extract_prompt_memories,
+    forget_memories,
+    forget_prompt_memories,
     needs_consolidation,
     remember_preference,
     remember_user,
     save_memories,
+    save_prompt_memories,
     trim_memories,
 )
 
@@ -291,6 +296,276 @@ def test_save_memories_supersedes_conflicting_project_meeting_time(tmp_path):
     combined = "\n".join(assemble_memory_entries(tmp_path))
     assert "4 p.m." in combined
     assert "project meeting tomorrow at 3 p.m." not in combined
+
+
+def test_save_memories_supersedes_inferred_group_when_new_entry_has_conflict_key(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "auto_short",
+                    "text": "I have a project meeting tomorrow at 3 p.m.",
+                    "priority": 3,
+                    "confidence": 1,
+                    "stability": "session",
+                    "source": "user_direct",
+                }
+            ]
+        },
+    )
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "auto_short",
+                    "text": "I have a project meeting tomorrow at 4 p.m.",
+                    "priority": 2,
+                    "confidence": 1,
+                    "stability": "session",
+                    "source": "user_direct",
+                    "conflict_key": "auto_short.project_meeting_time",
+                }
+            ]
+        },
+    )
+
+    rows = _read_jsonl(tmp_path / AUTO_JSONL_FILE)
+    assert [row["status"] for row in rows] == ["superseded", "active"]
+    combined = "\n".join(assemble_memory_entries(tmp_path))
+    assert "4 p.m." in combined
+    assert "3 p.m." not in combined
+
+
+def test_save_memories_conflict_key_supersedes_open_user_slot(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "The user's favorite color is yellow.",
+                    "priority": 2,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                    "conflict_key": "user.favorite_color",
+                }
+            ]
+        },
+    )
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "The user's favorite color is green.",
+                    "priority": 2,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                    "conflict_key": "user.favorite_color",
+                }
+            ]
+        },
+    )
+
+    rows = _read_jsonl(tmp_path / USER_JSONL_FILE)
+    assert [row["status"] for row in rows] == ["superseded", "active"]
+    assert rows[0]["conflict_key"] == "user.favorite_color"
+    assert rows[1]["supersedes"] == [rows[0]["id"]]
+    combined = "\n".join(assemble_memory_entries(tmp_path))
+    assert "green" in combined
+    assert "yellow" not in combined
+
+
+def test_save_memories_rejects_generic_or_invalid_conflict_keys(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {"kind": "user", "text": "Fact one.", "conflict_key": "user.info"},
+                {"kind": "user", "text": "Fact two.", "conflict_key": "user.favorite color!"},
+            ]
+        },
+    )
+
+    rows = _read_jsonl(tmp_path / USER_JSONL_FILE)
+    assert [row["status"] for row in rows] == ["active", "active"]
+    assert [row["conflict_key"] for row in rows] == ["", ""]
+
+
+def test_save_memories_rejects_conflict_key_with_wrong_kind_prefix(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "preferences",
+                    "text": "The user prefers concise replies.",
+                    "conflict_key": "user.reply_style",
+                }
+            ]
+        },
+    )
+
+    row = _read_jsonl(tmp_path / PREFERENCES_JSONL_FILE)[0]
+    assert row["conflict_key"] == ""
+
+
+def test_save_memories_canonicalizes_conflict_key_aliases(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "The user's favorite color is blue.",
+                    "conflict_key": "user.favorite_colour",
+                },
+                {
+                    "kind": "preferences",
+                    "text": "The user prefers brief replies.",
+                    "conflict_key": "preferences.response_style",
+                },
+            ]
+        },
+    )
+
+    assert _read_jsonl(tmp_path / USER_JSONL_FILE)[0]["conflict_key"] == "user.favorite_color"
+    assert _read_jsonl(tmp_path / PREFERENCES_JSONL_FILE)[0]["conflict_key"] == "preferences.reply_style"
+
+
+def test_save_memories_infers_favorite_slot_conflict_without_conflict_key(tmp_path):
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "The user's favorite editor is VS Code.",
+                    "priority": 2,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                }
+            ]
+        },
+    )
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "The user's favorite editor is Neovim.",
+                    "priority": 2,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                }
+            ]
+        },
+    )
+
+    rows = _read_jsonl(tmp_path / USER_JSONL_FILE)
+    assert [row["status"] for row in rows] == ["superseded", "active"]
+    combined = "\n".join(assemble_memory_entries(tmp_path, prompt="Which editor do I like?"))
+    assert "Neovim" in combined
+    assert "VS Code" not in combined
+
+
+def test_save_memories_infers_reply_style_conflict_without_conflict_key(tmp_path):
+    save_memories(tmp_path, {"memories": [{"kind": "preferences", "text": "The user prefers detailed replies.", "priority": 2}]})
+    save_memories(tmp_path, {"memories": [{"kind": "preferences", "text": "The user prefers short replies.", "priority": 2}]})
+
+    rows = _read_jsonl(tmp_path / PREFERENCES_JSONL_FILE)
+    assert [row["status"] for row in rows] == ["superseded", "active"]
+    combined = "\n".join(assemble_memory_entries(tmp_path, prompt="What reply style do I prefer?"))
+    assert "short" in combined
+    assert "detailed" not in combined
+
+
+def test_extract_prompt_memories_finds_natural_user_facts(tmp_path):
+    entries = extract_prompt_memories("My name is Jack. My favorite color is green.")
+    assert {(entry.kind, entry.conflict_key) for entry in entries} == {
+        ("user", "user.name"),
+        ("user", "user.favorite_color"),
+    }
+
+    saved = save_prompt_memories(tmp_path, "My name is Jack. My favorite color is green.")
+    assert saved == 2
+    combined = "\n".join(assemble_memory_entries(tmp_path, prompt="What is my favorite color?"))
+    assert "Jack" in combined
+    assert "green" in combined
+
+
+def test_save_prompt_memories_updates_conflicting_natural_fact(tmp_path):
+    save_prompt_memories(tmp_path, "My favorite color is yellow.")
+    save_prompt_memories(tmp_path, "Actually, my favorite color is green, not yellow.")
+
+    rows = _read_jsonl(tmp_path / USER_JSONL_FILE)
+    assert [row["status"] for row in rows] == ["superseded", "active"]
+    assert rows[1]["conflict_key"] == "user.favorite_color"
+    combined = "\n".join(assemble_memory_entries(tmp_path, prompt="What is my favorite color?"))
+    assert "green" in combined
+    assert "yellow" not in combined
+
+
+def test_save_prompt_memories_preserves_meeting_date_word(tmp_path):
+    save_prompt_memories(tmp_path, "I have a project meeting tomorrow at 3 p.m.")
+    save_prompt_memories(tmp_path, "Correction: the project meeting is at 4 p.m., not 3 p.m.")
+
+    rows = _read_jsonl(tmp_path / AUTO_JSONL_FILE)
+    assert [row["status"] for row in rows] == ["superseded", "active"]
+    assert "tomorrow" in rows[1]["text"]
+    combined = "\n".join(assemble_memory_entries(tmp_path, prompt="What time is the project meeting?"))
+    assert "tomorrow" in combined
+    assert "4 p.m." in combined
+    assert "3 p.m." not in combined
+
+
+def test_save_prompt_memories_ignores_memory_rejection(tmp_path):
+    saved = save_prompt_memories(tmp_path, "Do not remember this: my favorite color is green.")
+    assert saved == 0
+    assert not (tmp_path / USER_JSONL_FILE).exists()
+
+
+def test_forget_memories_supersedes_by_conflict_key_and_prompt(tmp_path):
+    save_prompt_memories(tmp_path, "My favorite color is green.")
+    assert forget_memories(tmp_path, "user.favorite_color") == 1
+    assert _read_jsonl(tmp_path / USER_JSONL_FILE)[0]["status"] == "superseded"
+
+    save_memories(
+        tmp_path,
+        {
+            "memories": [
+                {
+                    "kind": "user",
+                    "text": "The user's name is Jack.",
+                    "priority": 0,
+                    "confidence": 1,
+                    "stability": "stable",
+                    "source": "user_direct",
+                }
+            ]
+        },
+    )
+    assert forget_memories(tmp_path, "user.name") == 1
+
+    save_prompt_memories(tmp_path, "My favorite editor is Neovim.")
+    assert forget_prompt_memories(tmp_path, "Please forget my favorite editor.") == 1
+    rows = _read_jsonl(tmp_path / USER_JSONL_FILE)
+    assert [row["status"] for row in rows] == ["superseded", "superseded", "superseded"]
+
+
+def test_apply_memory_forget_accepts_payload_items(tmp_path):
+    save_prompt_memories(tmp_path, "My favorite color is green.")
+    apply_memory_forget(tmp_path, {"forget": [{"query": "user.favorite_color"}]})
+
+    assert _read_jsonl(tmp_path / USER_JSONL_FILE)[0]["status"] == "superseded"
 
 
 # ---------------------------------------------------------------------------
@@ -606,6 +881,7 @@ def test_stripper_two_consecutive_blocks_both_captured():
     text = (
         '<memory_save>{"memories":[{"kind":"user","text":"fact"}]}</memory_save>'
         '<memory_append>{"auto_short":"appended"}</memory_append>'
+        '<memory_forget>{"query":"user.favorite_color"}</memory_forget>'
         "prose after"
     )
     s = StreamingStripper()
@@ -616,6 +892,7 @@ def test_stripper_two_consecutive_blocks_both_captured():
 
     assert s.save_json == '{"memories":[{"kind":"user","text":"fact"}]}'
     assert s.append_json == '{"auto_short":"appended"}'
+    assert s.forget_json == '{"query":"user.favorite_color"}'
     assert "prose after" in visible
     assert "<memory_" not in visible
 

@@ -1,13 +1,17 @@
 # DEVLOG
 
-## 2026-05-09 — Structured priority memory
+## 2026-05-10 — v0.22.0 — Structured Priority Memory
 
 - Canonical profile memory is now stored as JSONL: `user.jsonl`, `preferences.jsonl`, and `auto_short.jsonl`
 - Model output uses hidden `<memory_save>{...}</memory_save>` blocks with `kind`, `text`, `priority`, `confidence`, `stability`, `source`, `evidence`, and `reason`
 - Recall uses priority cutoffs: normal mode includes `0..3`, thinking mode includes `0..10`, then applies `memory.context_limit`
 - The save path deduplicates exact entries, merges stronger priority/confidence, and marks simple conflicting name facts as `superseded`
+- Memory entries can now carry optional validated `conflict_key` values, allowing open-schema facts like `user.favorite_color` to replace older active values without introducing a fixed user model
+- Compatible conflict-key aliases now canonicalize to the same open slot, inferred favorite/reply-style conflicts are superseded, and writes use a profile-scoped file lock
+- The runtime now includes a conservative prompt fallback for explicit names, favorite/preferred facts, response-style preferences, and meeting times, so memory saving is not tied to a particular profile persona or a perfectly compliant model
+- Added `memory_forget`, prompt-level forget detection, and CLI `/forget <query>` for explicit deletion/supersession of active memory
 - Legacy Markdown memory files remain read-only fallback inputs; writes now go to JSONL
-- Added `scripts/memory_eval.py` for live model evals with a temporary profile, scripted prompts, JSONL memory checks, and semantic reply checks
+- Added `scripts/memory_eval.py` for live model evals with a temporary profile, scripted prompts, JSONL memory checks, semantic reply checks, natural-prompt saves, and conflict updates
 - Startup now scaffolds missing JSONL memory files for existing non-default profiles, so upgraded profiles like `robo` get the same memory files as `default`
 
 ---

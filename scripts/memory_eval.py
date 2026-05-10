@@ -27,11 +27,14 @@ from priests.memory.extractor import (  # noqa: E402
     USER_JSONL_FILE,
     StreamingStripper,
     append_memories,
+    apply_memory_forget,
     apply_memory_proposals,
     assemble_memory_entries,
     build_memory_instructions,
     clean_last_turn,
+    forget_prompt_memories,
     save_memories,
+    save_prompt_memories,
     trim_memories,
 )
 
@@ -56,6 +59,7 @@ class MemoryCheck:
     status: str = "active"
     max_priority: int | None = None
     min_confidence: float | None = None
+    conflict_key: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -129,6 +133,51 @@ def _cases() -> list[EvalStep]:
             ),
         ),
         EvalStep(
+            name="natural_save_color",
+            prompt="My favorite color is yellow.",
+            memory=(
+                MemoryCheck(
+                    kind="user",
+                    all_of=(r"\byellow\b", r"\bfavou?rite\b", r"\bcolor\b"),
+                    description="favorite color saved from a normal prompt",
+                    max_priority=3,
+                    min_confidence=0.6,
+                    conflict_key="user.favorite_color",
+                ),
+            ),
+        ),
+        EvalStep(
+            name="natural_update_color",
+            prompt="Actually, my favorite color is green, not yellow.",
+            memory=(
+                MemoryCheck(
+                    kind="user",
+                    all_of=(r"\bgreen\b", r"\bfavou?rite\b", r"\bcolor\b"),
+                    description="favorite color correction supersedes old color",
+                    max_priority=3,
+                    min_confidence=0.6,
+                    conflict_key="user.favorite_color",
+                ),
+            ),
+            forbidden_memory=(
+                ForbiddenMemoryCheck(
+                    kind="user",
+                    pattern=r"\byellow\b",
+                    unless=r"\bnot\s+yellow\b",
+                    description="old favorite color should not remain active",
+                ),
+            ),
+        ),
+        EvalStep(
+            name="recall_color",
+            prompt="What is my favorite color?",
+            reply=ReplyCheck(
+                all_of=(r"\bgreen\b",),
+                none_of=(r"\byellow\b",),
+                description="recalls corrected favorite color",
+            ),
+        ),
+        EvalStep(
             name="distractor",
             prompt="Unrelated check: what is 2 + 2? Please answer with only the number.",
             reply=ReplyCheck(all_of=(r"\b4\b",), description="answers unrelated prompt correctly"),
@@ -161,7 +210,7 @@ def _cases() -> list[EvalStep]:
             memory=(
                 MemoryCheck(
                     kind="auto_short",
-                    all_of=(r"\bproject\b", r"\bmeeting\b", TIME_4_PM),
+                    all_of=(r"\bproject\b", r"\bmeeting\b", TIME_4_PM, r"\btomorrow\b"),
                     description="corrected project meeting at 4 p.m. saved",
                     max_priority=3,
                     min_confidence=0.6,
@@ -180,8 +229,8 @@ def _cases() -> list[EvalStep]:
             name="recall_corrected_meeting",
             prompt="What time is the project meeting now?",
             reply=ReplyCheck(
-                all_of=(TIME_4_PM,),
-                none_of=(r"\b10\s*(?:a\.?\s*m\.?|am|p\.?\s*m\.?|pm)\b",),
+                all_of=(TIME_4_PM, r"\btomorrow\b"),
+                none_of=(r"\b10\s*(?:a\.?\s*m\.?|am|p\.?\s*m\.?|pm)\b", r"\btoday\b"),
                 description="recalls corrected project meeting at 4 p.m.",
             ),
         ),
@@ -189,7 +238,18 @@ def _cases() -> list[EvalStep]:
             name="unknown_name",
             prompt="What is my name?",
             reply=ReplyCheck(
-                any_of=(r"\b(do not|don't|not)\s+know\b", r"\bhaven't told\b", r"\bnot sure\b", r"\byou have not\b"),
+                any_of=(
+                    r"\b(do not|don't|not)\s+know\b",
+                    r"\bhaven't told\b",
+                    r"\bnot sure\b",
+                    r"\byou have not\b",
+                    r"\bdo not have (?:any )?record\b",
+                    r"\bdo not have access to your name\b",
+                    r"\bdo not have any information stored about your name\b",
+                    r"\bdo not have\b.*\bname\b",
+                    r"\bdon't seem to have\b.*\bname\b.*\b(saved|stored)\b",
+                    r"\bno record\b",
+                ),
                 none_of=(r"\bjack\b", r"\btao\b", r"\balice\b", r"\bbob\b"),
                 description="does not invent an unknown name",
             ),
@@ -246,6 +306,8 @@ def _matching_memory(rows: list[dict[str, Any]], check: MemoryCheck) -> list[dic
         if check.kind and row.get("kind") != check.kind:
             continue
         if check.status and row.get("status", "active") != check.status:
+            continue
+        if check.conflict_key is not None and row.get("conflict_key") != check.conflict_key:
             continue
         text = str(row.get("text", ""))
         if not all(_matches(pattern, text) for pattern in check.all_of):
@@ -350,6 +412,7 @@ async def _apply_memory_controls(
     stripper: StreamingStripper,
     memories_dir: Path,
     session_id: str,
+    prompt: str,
     store: Any,
     size_limit: int,
 ) -> int:
@@ -368,6 +431,15 @@ async def _apply_memory_controls(
             continue
         writer(memories_dir, payload, session_id=session_id)
         saved += 1
+    if stripper.forget_json:
+        try:
+            payload = json.loads(stripper.forget_json)
+        except json.JSONDecodeError:
+            payload = {}
+        if payload:
+            saved += apply_memory_forget(memories_dir, payload, session_id=session_id)
+    saved += forget_prompt_memories(memories_dir, prompt, session_id=session_id)
+    saved += save_prompt_memories(memories_dir, prompt, session_id=session_id)
     trim_memories(memories_dir, size_limit)
     return saved
 
@@ -385,7 +457,13 @@ async def run_eval(args: argparse.Namespace) -> tuple[list[StepResult], Path]:
         "Running priests live memory evaluation.",
         "For this evaluation, today's date is 2026-05-09. Tomorrow is 2026-05-10.",
         "When the user provides a fact worth remembering, follow the memory policy exactly.",
-        "Always include a visible natural-language response after any hidden memory block.",
+        "Explicit user facts and preferences in memory-test prompts are worth remembering.",
+        'Every prompt beginning with "Memory test:" contains a fact or preference that must be saved with memory_save.',
+        "Normal prompts can also contain facts worth saving; do not rely on the words 'Memory test'.",
+        "When the user corrects an existing fact, save the corrected fact with a hidden memory block before replying.",
+        "When the user asks to forget or delete memory, use memory_forget and do not save the forgotten fact again.",
+        "Never output only a hidden memory block. Always include a short visible natural-language sentence after it.",
+        "When recalling remembered meetings, preserve the stored date word exactly; do not change tomorrow into today.",
         build_memory_instructions(),
     ]
     session_id = f"memory-eval-{uuid.uuid4().hex}"
@@ -424,6 +502,7 @@ async def run_eval(args: argparse.Namespace) -> tuple[list[StepResult], Path]:
                     stripper=stripper,
                     memories_dir=memories_dir,
                     session_id=session_id,
+                    prompt=step.prompt,
                     store=store,
                     size_limit=args.size_limit,
                 )
@@ -432,6 +511,8 @@ async def run_eval(args: argparse.Namespace) -> tuple[list[StepResult], Path]:
             failures: list[str] = []
             if response.error:
                 failures.append("model request failed")
+            elif not visible.strip():
+                failures.append("visible reply was empty")
             if step.reply:
                 failures.extend(_check_reply(step.reply, visible))
             failures.extend(_check_memory(rows, step.memory))
@@ -464,7 +545,7 @@ def _print_report(results: list[StepResult], root: Path, verbose: bool) -> None:
         print(f"{idx:02d}. {status} {result.name}")
         print(f"    prompt: {result.prompt}")
         print(f"    reply:  {result.response}")
-        print(f"    memory control blocks applied: {result.save_blocks}")
+        print(f"    memory write batches applied: {result.save_blocks}")
         if result.failures:
             for failure in result.failures:
                 print(f"    - {failure}")
@@ -479,6 +560,7 @@ def _print_report(results: list[StepResult], root: Path, verbose: bool) -> None:
                             "kind": row.get("kind"),
                             "priority": row.get("priority"),
                             "confidence": row.get("confidence"),
+                            "conflict_key": row.get("conflict_key"),
                             "text": row.get("text"),
                         },
                         ensure_ascii=False,

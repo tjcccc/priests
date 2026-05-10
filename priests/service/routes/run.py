@@ -17,11 +17,14 @@ from priests.engine_factory import build_adapters, load_global_guide
 from priests.memory.extractor import (
     StreamingStripper,
     append_memories,
+    apply_memory_forget,
     apply_memory_proposals,
     assemble_memory_entries,
     build_memory_instructions,
     clean_last_turn,
+    forget_prompt_memories,
     save_memories,
+    save_prompt_memories,
     trim_memories,
 )
 from priests.profile.config import load_profile_config, resolve_provider_model
@@ -39,6 +42,7 @@ router = APIRouter()
 _SAVE_RE = re.compile(r"<memory_save>(.*?)</memory_save>", re.DOTALL | re.IGNORECASE)
 _APPEND_RE = re.compile(r"<memory_append>(.*?)</memory_append>", re.DOTALL | re.IGNORECASE)
 _PROPOSAL_RE = re.compile(r"<memory_proposal>(.*?)</memory_proposal>", re.DOTALL | re.IGNORECASE)
+_FORGET_RE = re.compile(r"<memory_forget>(.*?)</memory_forget>", re.DOTALL | re.IGNORECASE)
 _CONSOLIDATION_RE = re.compile(r"<memory_consolidation>(.*?)</memory_consolidation>", re.DOTALL | re.IGNORECASE)
 _COPILOT_REFRESH_SKEW_SECONDS = 300
 
@@ -47,6 +51,7 @@ def _strip_memory_blocks(text: str) -> str:
     text = _SAVE_RE.sub("", text)
     text = _APPEND_RE.sub("", text)
     text = _PROPOSAL_RE.sub("", text)
+    text = _FORGET_RE.sub("", text)
     text = _CONSOLIDATION_RE.sub("", text)
     return text
 
@@ -268,6 +273,25 @@ async def _apply_memory(
                     )
                 except (json.JSONDecodeError, ValueError):
                     pass
+            if m := _FORGET_RE.search(text):
+                try:
+                    apply_memory_forget(
+                        memories_dir,
+                        json.loads(m.group(1).strip()),
+                        session_id=response.session.id if response.session else body.session_id,
+                    )
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            forget_prompt_memories(
+                memories_dir,
+                body.prompt,
+                session_id=response.session.id if response.session else body.session_id,
+            )
+            save_prompt_memories(
+                memories_dir,
+                body.prompt,
+                session_id=response.session.id if response.session else body.session_id,
+            )
             trim_memories(memories_dir, size_limit)
     return response.model_copy(update={"text": _strip_memory_blocks(text)})
 
@@ -405,6 +429,13 @@ async def _sse_generator(body: RunRequest, request: Request, memories: bool):
                     apply_memory_proposals(memories_dir, json.loads(stripper.proposal_json), session_id=body.session_id)
                 except (json.JSONDecodeError, ValueError):
                     pass
+            if stripper.forget_json:
+                try:
+                    apply_memory_forget(memories_dir, json.loads(stripper.forget_json), session_id=body.session_id)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            forget_prompt_memories(memories_dir, body.prompt, session_id=body.session_id)
+            save_prompt_memories(memories_dir, body.prompt, session_id=body.session_id)
             trim_memories(memories_dir, size_limit)
 
     provider = priest_request.config.provider or "default"

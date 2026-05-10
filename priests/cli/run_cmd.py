@@ -99,7 +99,8 @@ async def _run_single(
     from priests.engine_factory import build_engine, load_global_guide
     from priests.memory.extractor import (
         StreamingStripper, clean_last_turn, pop_last_exchange,
-        append_memories, apply_memory_proposals, save_memories, trim_memories,
+        append_memories, apply_memory_forget, apply_memory_proposals, save_memories,
+        save_prompt_memories, trim_memories, forget_prompt_memories,
         deduplicate_file, assemble_memory_entries, build_memory_instructions,
         USER_FILE, PREFERENCES_FILE,
     )
@@ -174,6 +175,10 @@ async def _run_single(
                 append_memories(memories_dir, json.loads(stripper.append_json), session_id=session_id)
             if stripper.proposal_json:
                 apply_memory_proposals(memories_dir, json.loads(stripper.proposal_json), session_id=session_id)
+            if stripper.forget_json:
+                apply_memory_forget(memories_dir, json.loads(stripper.forget_json), session_id=session_id)
+            forget_prompt_memories(memories_dir, prompt, session_id=session_id)
+            save_prompt_memories(memories_dir, prompt, session_id=session_id)
             trim_memories(memories_dir, size_limit)
         except (json.JSONDecodeError, Exception):
             pass
@@ -268,6 +273,7 @@ _CHAT_HELP = """\
   [bold]/remember[/bold] [dim]<text>[/dim]       Save text to short-term memory (auto_short.jsonl).
   [bold]/remember user[/bold] [dim]<text>[/dim]  Save approved durable user memory (user.jsonl).
   [bold]/remember pref[/bold] [dim]<text>[/dim]  Save approved durable preference memory (preferences.jsonl).
+  [bold]/forget[/bold] [dim]<query>[/dim]        Supersede matching active memory by text or conflict key.
   [bold]/help[/bold]              Show this message.\
 """
 
@@ -290,7 +296,8 @@ async def _run_chat(
     from priests.engine_factory import build_engine, load_global_guide
     from priests.memory.extractor import (
         StreamingStripper, clean_last_turn, pop_last_exchange,
-        append_memories, apply_memory_proposals, save_memories, trim_memories,
+        append_memories, apply_memory_forget, apply_memory_proposals, save_memories,
+        save_prompt_memories, trim_memories, forget_memories, forget_prompt_memories,
         deduplicate_file, assemble_memory_entries, build_memory_instructions,
         remember_short, remember_user, remember_preference,
         USER_FILE, PREFERENCES_FILE,
@@ -500,6 +507,17 @@ async def _run_chat(
                     )
                     continue
 
+                elif raw.lower().startswith("/forget "):
+                    query = raw[len("/forget "):].strip()
+                    if not query:
+                        err_console.print("[yellow]Usage:[/yellow] /forget <query>")
+                    elif not memories_on:
+                        err_console.print("[yellow]Memories are disabled for this profile.[/yellow]")
+                    else:
+                        count = forget_memories(memories_dir, query)
+                        console.print(f"[dim]Forgot {count} matching memory entr{'y' if count == 1 else 'ies'}.[/dim]")
+                    continue
+
                 elif raw.lower().startswith("/remember user "):
                     content = raw[len("/remember user "):].strip()
                     if not content:
@@ -700,6 +718,10 @@ async def _run_chat(
                         append_memories(memories_dir, json.loads(stripper.append_json), session_id=sid)
                     if stripper.proposal_json:
                         apply_memory_proposals(memories_dir, json.loads(stripper.proposal_json), session_id=sid)
+                    if stripper.forget_json:
+                        apply_memory_forget(memories_dir, json.loads(stripper.forget_json), session_id=sid)
+                    forget_prompt_memories(memories_dir, raw, session_id=sid)
+                    save_prompt_memories(memories_dir, raw, session_id=sid)
                     trim_memories(memories_dir, size_limit)
                 except (json.JSONDecodeError, Exception):
                     pass

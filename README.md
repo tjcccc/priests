@@ -279,7 +279,7 @@ Profile files and memory files have different authority:
 
 Legacy `memories/notes.md` is still read if present, but priests treats it as read-only legacy memory and no longer writes to it automatically.
 
-Each JSONL memory entry stores text plus metadata such as `priority`, `confidence`, `stability`, `source`, timestamps, and supersession status. Priority `0` is highest and is reserved for rare, stable facts such as the user's name.
+Each JSONL memory entry stores text plus metadata such as `priority`, `confidence`, `stability`, `source`, timestamps, optional `conflict_key`, and supersession status. Priority `0` is highest and is reserved for rare, stable facts such as the user's name.
 
 | Policy | Behavior |
 |--------|----------|
@@ -288,7 +288,18 @@ Each JSONL memory entry stores text plus metadata such as `priority`, `confidenc
 | Recall budget | Normal mode recalls priority `0..3`; thinking mode recalls priority `0..10`; `memory.context_limit` is the final hard budget |
 | Never auto-written | `PROFILE.md`, `RULES.md`, `CUSTOM.md`, `profile.toml`, legacy `notes.md` |
 
-The model emits hidden `<memory_save>{...}</memory_save>` JSON blocks. priests strips those blocks from visible replies, validates the structured entries, deduplicates exact matches, supersedes simple conflicts such as corrected user names, and trims low-priority short-term entries once `auto_short.jsonl` exceeds `memory.size_limit`.
+The model emits hidden `<memory_save>{...}</memory_save>` JSON blocks for saves and `<memory_forget>{...}</memory_forget>` blocks for explicit deletion requests. priests strips those blocks from visible replies, validates the structured entries, deduplicates exact matches, canonicalizes compatible conflict-key aliases, supersedes matching open-schema `conflict_key` slots such as `user.favorite_color`, and trims low-priority short-term entries once `auto_short.jsonl` exceeds `memory.size_limit`.
+
+As a reliability backstop, priests also applies conservative code-side extraction for explicit high-value facts in the user prompt, such as names, favorite/preferred values, response-style preferences, and meeting times. This keeps memory behavior consistent across profiles and smaller models even when the model forgets to emit a hidden save block.
+
+Interactive chat includes explicit controls:
+
+```text
+/remember <text>       Save short-term memory
+/remember user <text>  Save durable user memory
+/remember pref <text>  Save durable preference memory
+/forget <query>        Supersede active memory by text or conflict key
+```
 
 Run the live memory eval against a local model:
 
