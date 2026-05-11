@@ -13,10 +13,4 @@ These are intentionally not current `priests` TODO items: token-aware budgeting,
 
 ## Showcase Chat App Polish
 
-- Add a model health/status panel in the UI using the provider status API.
-- Wire local model storage listing/cleanup into the UI.
-- Improve first-run onboarding in the UI.
-- Wire provider/model validation into config saves in the UI.
-- Add a cleaner empty state for new users.
 - Wire profile/config import-export into the UI if it proves useful; CLI support already exists.
-- Improve visual polish around errors and long-running model startup.

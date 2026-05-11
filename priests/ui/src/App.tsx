@@ -121,6 +121,62 @@ function EmojiPicker({ onPick, onClose }: { onPick: (e: string) => void; onClose
   )
 }
 
+function EmptyChatState({ profile, provider, model, configured, onPrompt, onConfig }: {
+  profile: string
+  provider: string | null
+  model: string | null
+  configured: boolean
+  onPrompt: (text: string) => void
+  onConfig: () => void
+}) {
+  if (!configured) {
+    return (
+      <div className="min-h-[320px] flex items-center justify-center">
+        <div className="w-full max-w-[560px] rounded-[18px] border border-black/[0.08] bg-white/70 px-6 py-5 text-center">
+          <div className="text-[15px] font-semibold text-black">No model configured</div>
+          <div className="mt-1 text-[13px] text-black/45">Add a provider and model before starting chat.</div>
+          <button
+            onClick={onConfig}
+            className="mt-4 px-4 py-2 rounded-xl bg-[#007AFF] text-white text-[13px] font-medium hover:bg-[#0051D5] transition-colors"
+          >
+            Open Configuration
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const prompts = [
+    'Summarize what you remember about me.',
+    'Help me plan today in three priorities.',
+    'Draft a concise note for me.',
+  ]
+
+  return (
+    <div className="min-h-[320px] flex items-center justify-center">
+      <div className="w-full max-w-[640px]">
+        <div className="text-center mb-5">
+          <div className="text-[18px] font-semibold text-black">New chat</div>
+          <div className="mt-1 text-[13px] text-black/45">
+            {profile} · {provider}/{model}
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {prompts.map(prompt => (
+            <button
+              key={prompt}
+              onClick={() => onPrompt(prompt)}
+              className="min-h-[64px] px-3 py-3 rounded-xl border border-black/[0.08] bg-white/75 hover:bg-white text-[13px] leading-[1.35] text-black/65 text-left transition-colors"
+            >
+              {prompt}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -160,6 +216,8 @@ export default function App() {
   const [thinking, setThinking] = useState(false)
   const [streaming, setStreaming] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
+  const [chatError, setChatError] = useState<string | null>(null)
+  const [slowResponse, setSlowResponse] = useState(false)
 
   // Files — attached for current turn
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([])
@@ -210,6 +268,13 @@ export default function App() {
     ?? null
 
   const hasUploadingImages = attachedImages.some(img => img.uuid === null)
+  const hasConfiguredModel = Boolean(activeProvider && activeModel)
+
+  const openConfig = () => {
+    const returnTo = selectedSession ? `/ui/session/${selectedSession.id}` : '/ui'
+    window.sessionStorage.setItem('priests:returnToChat', returnTo)
+    navigate('/ui/config', { state: { returnTo } })
+  }
 
   // ---------------------------------------------------------------------------
   // Load on mount
@@ -271,6 +336,15 @@ export default function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streamingContent])
+
+  useEffect(() => {
+    if (!streaming || streamingContent) {
+      setSlowResponse(false)
+      return
+    }
+    const timer = window.setTimeout(() => setSlowResponse(true), 8000)
+    return () => window.clearTimeout(timer)
+  }, [streaming, streamingContent])
 
   // ---------------------------------------------------------------------------
   // Session actions
@@ -481,8 +555,10 @@ export default function App() {
 
   const sendMessage = async () => {
     const text = input.trim()
-    if (!text || streaming || hasUploadingImages) return
+    if (!text || streaming || hasUploadingImages || !hasConfiguredModel) return
     setInput('')
+    setChatError(null)
+    setSlowResponse(false)
 
     const isNew = !selectedSession
     const sessionId = selectedSession?.id ?? pendingSessionId
@@ -540,6 +616,7 @@ export default function App() {
         })
       },
       err => {
+        setChatError(err)
         setMessages(prev => [...prev, {
           role: 'assistant',
           content: `*Error: ${err}*`,
@@ -632,7 +709,7 @@ export default function App() {
 
         <div className="p-3 border-t border-black/[0.06]">
           <button
-            onClick={() => navigate('/ui/config')}
+            onClick={openConfig}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-black/40 hover:bg-black/[0.06] hover:text-black/70 cursor-pointer transition-colors"
             title="Configuration"
           >
@@ -691,10 +768,20 @@ export default function App() {
         {/* Messages */}
         <main className="flex-1 overflow-y-auto px-6 py-6" style={{ scrollbarGutter: 'stable both-edges' }}>
           <div className="max-w-[900px] mx-auto space-y-6">
-            {messages.length === 0 && !streaming && (
-              <div className="flex items-center justify-center min-h-[200px]">
-                <p className="text-[15px] text-black/30">Start a conversation</p>
+            {chatError && (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-600">
+                {chatError}
               </div>
+            )}
+            {messages.length === 0 && !streaming && (
+              <EmptyChatState
+                profile={selectedProfile}
+                provider={activeProvider}
+                model={activeModel}
+                configured={hasConfiguredModel}
+                onPrompt={setInput}
+                onConfig={openConfig}
+              />
             )}
             {messages.map((msg, i) => (
               <div key={i} className={msg.role === 'user' ? 'flex justify-end' : ''}>
@@ -754,12 +841,19 @@ export default function App() {
                       <span className="inline-block w-[2px] h-4 bg-black/50 animate-pulse ml-0.5 align-middle rounded-sm" />
                     </>
                   ) : (
-                    <div className="flex gap-1">
-                      {[0, 1, 2].map(i => (
-                        <div key={i} className="w-2 h-2 rounded-full bg-black/30 animate-bounce"
-                          style={{ animationDelay: `${i * 0.15}s` }} />
-                      ))}
-                    </div>
+                    <>
+                      <div className="flex gap-1">
+                        {[0, 1, 2].map(i => (
+                          <div key={i} className="w-2 h-2 rounded-full bg-black/30 animate-bounce"
+                            style={{ animationDelay: `${i * 0.15}s` }} />
+                        ))}
+                      </div>
+                      {slowResponse && (
+                        <div className="mt-3 text-[12px] text-black/40">
+                          Waiting for the model to respond.
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -892,7 +986,7 @@ export default function App() {
                   {/* Send */}
                   <button
                     onClick={sendMessage}
-                    disabled={!input.trim() || streaming || hasUploadingImages}
+                    disabled={!input.trim() || streaming || hasUploadingImages || !hasConfiguredModel}
                     className="flex items-center gap-2 bg-[#007AFF] hover:bg-[#0051D5] disabled:bg-black/20 disabled:cursor-not-allowed text-white px-4 py-2 rounded-xl text-[13px] font-medium transition-colors"
                   >
                     {streaming ? (

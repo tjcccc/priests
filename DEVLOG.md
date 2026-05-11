@@ -1,5 +1,17 @@
 # DEVLOG
 
+## 2026-05-11 — v0.25.0 — config UI provider polish
+
+- Wired provider health status into the Config page using the provider status API
+- Added provider/model validation before saving default models and configured model rows
+- Added Local Models UI for Ollama storage listing and guarded local model deletion
+- Added local model storage and delete HTTP endpoints for the web UI
+- Improved the chat empty state, no-model first-run state, stream error display, and slow-response waiting message
+- Back from Config now returns to the previous chat session instead of always opening a fresh chat page
+- Added a first-run setup checklist to the Config page
+
+---
+
 ## 2026-05-11 — v0.24.0 — non-UI polish foundations
 
 - Added provider status and provider/model validation primitives for CLI and HTTP service use

@@ -2,6 +2,20 @@
 
 All notable changes to `priests` are documented here.
 
+## [0.25.0] — 2026-05-11
+
+### Added
+- Provider health status panel in the Config page, backed by the provider status API
+- Provider/model validation before saving default models and configured model rows
+- Local Models UI for Ollama storage listing and guarded local model deletion
+- Local model storage and delete HTTP endpoints for the web UI
+- First-run setup checklist in the Config page
+
+### Changed
+- Chat empty and no-model states now give clearer setup guidance
+- Stream errors and slow model startup now surface visibly in chat
+- Returning from Config now preserves the previous chat session route
+
 ## [0.24.0] — 2026-05-11
 
 ### Added

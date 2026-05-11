@@ -343,12 +343,14 @@ To disable permanently for a profile, set `memories = false` in `profile.toml`.
 Start the service with `priests service start` and open `http://localhost:9000/ui`.
 
 - **Chat**: streaming responses, markdown rendering, image attach (drag-and-drop or click), per-turn model and timing info
+- **First-run state**: clearer no-model and new-chat states, with visible slow-response and error feedback
 - **Sessions**: sidebar with per-profile session lists; pin, rename, and delete sessions
 - **Config page** (`/ui/config`): full settings UI with section nav
   - Defaults: provider + model select, profile, timeout, thinking mode
   - Profile Configuration: editor for PROFILE.md / RULES.md / CUSTOM.md per profile; rename and delete profiles
-  - Model Configuration: saved model list grouped by provider type (local / API / OAuth)
-  - Providers: per-provider API key, base URL, and proxy toggle
+  - Model Configuration: saved model list grouped by provider type (local / API / OAuth), with provider/model validation before save
+  - Providers: per-provider API key, base URL, proxy toggle, and health status
+  - Local Models: Ollama model storage listing and guarded local delete
   - Memory, Web Search, Service, Proxy, Paths sections — all editable with hot-reload (no restart required except host/port)
 
 ## HTTP API
@@ -368,6 +370,8 @@ PATCH /v1/config                    partial config update (dotted keys)
 GET  /v1/providers/{name}/models    list available models for a provider
 GET  /v1/providers/status           provider config and local reachability status
 POST /v1/providers/validate         validate a provider/model pair
+GET  /v1/providers/{name}/storage   list local model storage where supported
+DELETE /v1/providers/{name}/models  delete a local model where supported
 GET  /v1/profiles                   list profiles
 GET  /v1/profiles/{name}            get profile files
 PUT  /v1/profiles/{name}            update profile files

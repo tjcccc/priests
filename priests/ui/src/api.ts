@@ -254,6 +254,32 @@ export interface ProviderRegistryItem {
   provider_type: string
 }
 
+export interface ProviderStatus {
+  name: string
+  label: string
+  provider_type: string
+  configured: boolean
+  reachable: boolean | null
+  base_url: string
+  model_count: number | null
+  message: string
+}
+
+export interface ProviderValidation {
+  provider: string
+  model: string
+  valid: boolean
+  status: string
+  message: string
+}
+
+export interface LocalModelStorageItem {
+  name: string
+  size: number
+  digest: string
+  modified_at: string | null
+}
+
 export interface ConfigData {
   defaults: {
     provider: string | null
@@ -296,6 +322,45 @@ export async function fetchProviderModels(name: string): Promise<string[]> {
     return r.json()
   } catch {
     return []
+  }
+}
+
+export async function fetchProviderStatus(): Promise<ProviderStatus[]> {
+  const r = await fetch('/v1/providers/status')
+  if (!r.ok) throw new Error(`Failed to fetch provider status: ${r.status}`)
+  return r.json()
+}
+
+export async function validateProviderModel(provider: string, model: string): Promise<ProviderValidation> {
+  const r = await fetch('/v1/providers/validate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, model }),
+  })
+  if (!r.ok) {
+    const text = await r.text()
+    throw new Error(`Model validation failed: ${text}`)
+  }
+  return r.json()
+}
+
+export async function fetchProviderStorage(name: string): Promise<LocalModelStorageItem[]> {
+  const r = await fetch(`/v1/providers/${encodeURIComponent(name)}/storage`)
+  if (!r.ok) {
+    const text = await r.text()
+    throw new Error(`Storage fetch failed: ${text}`)
+  }
+  return r.json()
+}
+
+export async function deleteLocalProviderModel(provider: string, model: string): Promise<void> {
+  const r = await fetch(
+    `/v1/providers/${encodeURIComponent(provider)}/models?model=${encodeURIComponent(model)}`,
+    { method: 'DELETE' },
+  )
+  if (!r.ok) {
+    const text = await r.text()
+    throw new Error(`Model delete failed: ${text}`)
   }
 }
 

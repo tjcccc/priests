@@ -7,7 +7,13 @@ from pydantic import BaseModel  # noqa: F401 (used by inline schema classes belo
 from priests.config.loader import load_config, save_config
 from priests.config.model import AppConfig, OpenAICompatConfig
 from priests.engine_factory import build_adapters
-from priests.provider_status import provider_status_async, validate_model
+from priests.provider_status import (
+    delete_ollama_model,
+    fetch_ollama_model_records,
+    provider_base_url,
+    provider_status_async,
+    validate_model,
+)
 from priests.providers.github_copilot_auth import (
     GitHubCopilotAuthError,
     exchange_github_token_for_copilot_token,
@@ -20,8 +26,10 @@ from priests.service.schemas import (
     ProviderStatusOut,
     ProviderConfigOut,
     ProviderRegistryItem,
+    ProviderStorageModelOut,
     ProviderValidateIn,
     ProviderValidateOut,
+    DeleteLocalModelOut,
 )
 
 router = APIRouter()
@@ -304,6 +312,46 @@ async def validate_provider_model(body: ProviderValidateIn, request: Request) ->
         status=result.status,
         message=result.message,
     )
+
+
+@router.get("/providers/{name}/storage", response_model=list[ProviderStorageModelOut])
+async def get_provider_storage(name: str, request: Request) -> list[ProviderStorageModelOut]:
+    """Return local model storage details where supported."""
+    if name != "ollama":
+        raise HTTPException(status_code=422, detail="Local model storage currently supports only Ollama.")
+    base_url = provider_base_url(request.app.state.config, name)
+    records = fetch_ollama_model_records(base_url, timeout=2.0)
+    if records is None:
+        raise HTTPException(status_code=502, detail=f"Could not connect to Ollama at {base_url}")
+    return [
+        ProviderStorageModelOut(
+            name=str(record.get("name", "")),
+            size=int(record.get("size") or 0),
+            digest=str(record.get("digest") or ""),
+            modified_at=record.get("modified_at"),
+        )
+        for record in records
+        if record.get("name")
+    ]
+
+
+@router.delete("/providers/{name}/models", response_model=DeleteLocalModelOut)
+async def delete_local_provider_model(name: str, model: str, request: Request) -> DeleteLocalModelOut:
+    """Delete a local model where supported."""
+    if name != "ollama":
+        raise HTTPException(status_code=422, detail="Local model deletion currently supports only Ollama.")
+    base_url = provider_base_url(request.app.state.config, name)
+    records = fetch_ollama_model_records(base_url, timeout=2.0)
+    if records is None:
+        raise HTTPException(status_code=502, detail=f"Could not connect to Ollama at {base_url}")
+    available = {str(record.get("name", "")) for record in records}
+    if model not in available:
+        raise HTTPException(status_code=404, detail=f"Ollama model not found: {model}")
+    try:
+        delete_ollama_model(base_url, model, timeout=30.0)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Delete failed: {exc}")
+    return DeleteLocalModelOut(deleted=True, provider=name, model=model)
 
 
 @router.post("/providers/github_copilot/device/start", response_model=GitHubCopilotDeviceStartOut)

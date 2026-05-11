@@ -143,3 +143,16 @@ class ProviderValidateOut(BaseModel):
     valid: bool
     status: str
     message: str
+
+
+class ProviderStorageModelOut(BaseModel):
+    name: str
+    size: int
+    digest: str = ""
+    modified_at: str | None = None
+
+
+class DeleteLocalModelOut(BaseModel):
+    deleted: bool
+    provider: str
+    model: str

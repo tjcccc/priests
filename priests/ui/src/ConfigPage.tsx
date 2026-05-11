@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   fetchConfig, patchConfig, fetchModels, fetchProfiles, fetchProfileFiles,
   putProfileFiles, createProfile, renameProfile, deleteProfile, putModelOptions, fetchProviderModels,
+  fetchProviderStatus, validateProviderModel, fetchProviderStorage, deleteLocalProviderModel,
   startGitHubCopilotDeviceFlow, pollGitHubCopilotDeviceFlow,
   ConfigData, ProviderRegistryItem, ModelsConfig, ProfileFiles, ProviderConfigData,
+  ProviderStatus, LocalModelStorageItem,
 } from './api'
 
 // ---------------------------------------------------------------------------
@@ -16,6 +18,7 @@ const SECTIONS = [
   { id: 'profile-config', label: 'Profile Configuration' },
   { id: 'model-config',   label: 'Model Configuration' },
   { id: 'providers',      label: 'Providers' },
+  { id: 'local-models',   label: 'Local Models' },
   { id: 'memory',         label: 'Memory' },
   { id: 'web-search',     label: 'Web Search' },
   { id: 'service',        label: 'Service' },
@@ -67,6 +70,16 @@ function StatusBadge({ state }: { state: SectionState }) {
   )
   if (state.status === 'error') return <span className="text-[12px] text-red-500">{state.error ?? 'Error'}</span>
   return <span />
+}
+
+function formatBytes(size: number) {
+  let value = size
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  for (const unit of units) {
+    if (value < 1024 || unit === 'TB') return unit === 'B' ? `${value} B` : `${value.toFixed(1)} ${unit}`
+    value = value / 1024
+  }
+  return `${size} B`
 }
 
 function SaveRow({ onSave, state }: { onSave: () => void; state: SectionState }) {
@@ -366,6 +379,193 @@ function ProviderCard({ name, info, baseUrl, apiKey, useProxy, onChange, onAutho
   )
 }
 
+function ProviderHealthPanel({ statuses, loading, onRefresh }: {
+  statuses: ProviderStatus[]
+  loading: boolean
+  onRefresh: () => void
+}) {
+  const localFirst = [...statuses].sort((a, b) => {
+    const rank = (s: ProviderStatus) => s.provider_type === 'local' ? 0 : s.configured ? 1 : 2
+    return rank(a) - rank(b) || a.name.localeCompare(b.name)
+  })
+
+  return (
+    <div className="border border-black/[0.07] rounded-xl overflow-hidden">
+      <div className="px-4 py-3 border-b border-black/[0.06] flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[13px] font-semibold text-black">Provider Health</div>
+          <div className="text-[11px] text-black/40 mt-0.5">Local providers are probed; API providers show configuration state.</div>
+        </div>
+        <button onClick={onRefresh} disabled={loading}
+          className="px-3 py-1.5 rounded-lg border border-black/[0.08] bg-white hover:bg-black/[0.03] disabled:opacity-50 cursor-pointer text-[12px] text-black/60 font-medium transition-colors">
+          {loading ? 'Checking…' : 'Refresh'}
+        </button>
+      </div>
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-black/[0.06]">
+            <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-black/40 uppercase">Provider</th>
+            <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-black/40 uppercase">Config</th>
+            <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-black/40 uppercase">Reach</th>
+            <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-black/40 uppercase">Models</th>
+            <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-black/40 uppercase">Message</th>
+          </tr>
+        </thead>
+        <tbody>
+          {localFirst.map((status, i) => (
+            <tr key={status.name} className={i < localFirst.length - 1 ? 'border-b border-black/[0.04]' : ''}>
+              <td className="px-4 py-2.5 text-[12px] text-black font-medium">{status.name}</td>
+              <td className="px-4 py-2.5 text-[12px]">
+                <span className={status.configured ? 'text-[#34C759]' : 'text-black/35'}>
+                  {status.configured ? 'configured' : 'missing'}
+                </span>
+              </td>
+              <td className="px-4 py-2.5 text-[12px]">
+                {status.reachable === true && <span className="text-[#34C759]">online</span>}
+                {status.reachable === false && <span className="text-[#FF3B30]">offline</span>}
+                {status.reachable === null && <span className="text-black/35">n/a</span>}
+              </td>
+              <td className="px-4 py-2.5 text-[12px] text-black/60">{status.model_count ?? ''}</td>
+              <td className="px-4 py-2.5 text-[12px] text-black/45">{status.message}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function LocalModelStoragePanel() {
+  const [models, setModels] = useState<LocalModelStorageItem[]>([])
+  const [state, setState] = useState<SectionState>({ status: 'idle' })
+
+  const load = useCallback(async () => {
+    setState({ status: 'saving' })
+    try {
+      const rows = await fetchProviderStorage('ollama')
+      setModels(rows.sort((a, b) => a.name.localeCompare(b.name)))
+      setState({ status: 'idle' })
+    } catch (e) {
+      setState({ status: 'error', error: String(e) })
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const remove = async (name: string) => {
+    if (!window.confirm(`Delete local Ollama model "${name}"?`)) return
+    setState({ status: 'saving' })
+    try {
+      await deleteLocalProviderModel('ollama', name)
+      await load()
+    } catch (e) {
+      setState({ status: 'error', error: String(e) })
+    }
+  }
+
+  return (
+    <section id="local-models">
+      <SectionHeader title="Local Models" action={
+        <button onClick={load} disabled={state.status === 'saving'}
+          className="px-3 py-1.5 rounded-lg border border-black/[0.08] bg-white hover:bg-black/[0.03] disabled:opacity-50 cursor-pointer text-[12px] text-black/60 font-medium transition-colors">
+          {state.status === 'saving' ? 'Loading…' : 'Refresh'}
+        </button>
+      } />
+      <Card>
+        {state.status === 'error' && (
+          <div className="mx-4 mt-4 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-[12px] text-red-600">
+            {state.error}
+          </div>
+        )}
+        {models.length === 0 ? (
+          <div className="px-4 py-8 text-center text-[13px] text-black/30">
+            No Ollama models found.
+          </div>
+        ) : (
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-black/[0.06]">
+                <th className="text-left px-4 py-3 text-[12px] font-semibold text-black/50">Model</th>
+                <th className="text-right px-4 py-3 text-[12px] font-semibold text-black/50">Size</th>
+                <th className="text-left px-4 py-3 text-[12px] font-semibold text-black/50">Digest</th>
+                <th className="text-right px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {models.map((model, i) => (
+                <tr key={model.name} className={i < models.length - 1 ? 'border-b border-black/[0.06]' : ''}>
+                  <td className="px-4 py-3 text-[13px] text-black font-medium">{model.name}</td>
+                  <td className="px-4 py-3 text-[13px] text-black/60 text-right">{formatBytes(model.size)}</td>
+                  <td className="px-4 py-3 text-[12px] text-black/40 font-mono">{model.digest.slice(0, 16)}</td>
+                  <td className="px-4 py-3 text-right">
+                    <button onClick={() => remove(model.name)}
+                      className="text-[#FF3B30] hover:text-[#FF3B30]/70 cursor-pointer text-[13px] font-medium transition-colors">
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </section>
+  )
+}
+
+function SetupChecklist({ defaults, modelCount, profileCount }: {
+  defaults: ConfigData['defaults']
+  modelCount: number
+  profileCount: number
+}) {
+  const items = [
+    {
+      label: 'Provider',
+      ready: Boolean(defaults.provider),
+      target: 'providers',
+    },
+    {
+      label: 'Model',
+      ready: Boolean(defaults.provider && defaults.model && modelCount > 0),
+      target: 'model-config',
+    },
+    {
+      label: 'Profile',
+      ready: profileCount > 0,
+      target: 'profile-config',
+    },
+  ]
+  if (items.every(item => item.ready)) return null
+
+  return (
+    <section id="setup">
+      <Card>
+        <div className="px-5 py-4 flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <div className="text-[14px] font-semibold text-black">Setup</div>
+            <div className="text-[12px] text-black/45 mt-0.5">Complete these basics before starting chat.</div>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            {items.map(item => (
+              <button
+                key={item.label}
+                onClick={() => scrollTo(item.target)}
+                className={`px-3 py-1.5 rounded-lg border text-[12px] font-medium transition-colors ${
+                  item.ready
+                    ? 'border-[#34C759]/20 bg-[#34C759]/10 text-[#258A3E]'
+                    : 'border-black/[0.08] bg-white hover:bg-black/[0.03] text-black/60'
+                }`}
+              >
+                {item.ready ? 'Done' : 'Set'} {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </Card>
+    </section>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Model Configuration section
 // ---------------------------------------------------------------------------
@@ -413,6 +613,13 @@ function ModelConfigSection({ modelsConfig, registry, providers }: {
   const save = async () => {
     setState({ status: 'saving' })
     try {
+      for (const row of rows) {
+        const result = await validateProviderModel(row.provider, row.model)
+        if (!result.valid) {
+          setState({ status: 'error', error: `${row.provider}/${row.model}: ${result.message}` })
+          return
+        }
+      }
       await putModelOptions(rows.map(r => `${r.provider}/${r.model}`))
       setState({ status: 'saved' })
     } catch (e) {
@@ -801,6 +1008,7 @@ function ProfileConfigSection({ profileList, modelsConfig, onProfileCreated }: {
 
 export default function ConfigPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [config, setConfig] = useState<ConfigData | null>(null)
   const [modelsConfig, setModelsConfig] = useState<ModelsConfig | null>(null)
   const [profileList, setProfileList] = useState<string[]>([])
@@ -812,6 +1020,8 @@ export default function ConfigPage() {
 
   const [providerDrafts, setProviderDrafts] = useState<Record<string, { base_url: string; api_key: string; use_proxy: boolean }>>({})
   const [providersState, setProvidersState] = useState<SectionState>({ status: 'idle' })
+  const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([])
+  const [providerStatusLoading, setProviderStatusLoading] = useState(false)
 
   const [memory, setMemory] = useState<ConfigData['memory'] | null>(null)
   const [memoryState, setMemoryState] = useState<SectionState>({ status: 'idle' })
@@ -844,6 +1054,21 @@ export default function ConfigPage() {
       .catch(e => { setLoadError(String(e)); setLoading(false) })
   }, [])
 
+  const refreshProviderStatuses = useCallback(async () => {
+    setProviderStatusLoading(true)
+    try {
+      setProviderStatuses(await fetchProviderStatus())
+    } catch {
+      setProviderStatuses([])
+    } finally {
+      setProviderStatusLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshProviderStatuses()
+  }, [refreshProviderStatuses])
+
   // ---------------------------------------------------------------------------
   // Save handlers
   // ---------------------------------------------------------------------------
@@ -852,6 +1077,13 @@ export default function ConfigPage() {
     if (!defaults) return
     setDefaultsState({ status: 'saving' })
     try {
+      if (defaults.provider && defaults.model) {
+        const result = await validateProviderModel(defaults.provider, defaults.model)
+        if (!result.valid) {
+          setDefaultsState({ status: 'error', error: result.message })
+          return
+        }
+      }
       const updates: Record<string, string> = {
         'default.provider': defaults.provider ?? '',
         'default.model': defaults.model ?? '',
@@ -898,6 +1130,7 @@ export default function ConfigPage() {
       if (Object.keys(updates).length === 0) { setProvidersState({ status: 'idle' }); return }
       await patchConfig(updates)
       await refreshConfig()
+      await refreshProviderStatuses()
       setProvidersState({ status: 'saved' })
     } catch (e) {
       setProvidersState({ status: 'error', error: String(e) })
@@ -970,6 +1203,11 @@ export default function ConfigPage() {
     setProviderDrafts(prev => ({ ...prev, [name]: { ...prev[name], [field]: value } }))
 
   const defaultsProviderInfo = config?.registry.find(r => r.name === defaults?.provider)
+  const backToChat = () => {
+    const state = location.state as { returnTo?: string } | null
+    const returnTo = state?.returnTo || window.sessionStorage.getItem('priests:returnToChat') || '/ui'
+    navigate(returnTo)
+  }
 
   // ---------------------------------------------------------------------------
   // Render
@@ -985,7 +1223,7 @@ export default function ConfigPage() {
         </div>
 
         <div className="px-3 mt-1">
-          <button onClick={() => navigate('/ui')}
+          <button onClick={backToChat}
             className="flex items-center gap-2 px-3 py-2 rounded-lg text-black/50 hover:bg-black/[0.04] hover:text-black/70 cursor-pointer transition-colors text-[13px]">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
               <path d="M19 12H5M12 5l-7 7 7 7" strokeLinecap="round" strokeLinejoin="round" />
@@ -1032,6 +1270,12 @@ export default function ConfigPage() {
 
             {!loading && !loadError && config && defaults && memory && webSearch && service && modelsConfig && (
               <>
+                <SetupChecklist
+                  defaults={defaults}
+                  modelCount={modelsConfig.configured_options.length}
+                  profileCount={profileList.length}
+                />
+
                 {/* ── DEFAULTS ─────────────────────────────────────── */}
                 <section id="defaults">
                   <SectionHeader title="Defaults" />
@@ -1106,7 +1350,12 @@ export default function ConfigPage() {
                 <section id="providers">
                   <SectionHeader title="Providers" />
                   <Card>
-                    <div className="px-6 py-5 space-y-3">
+                    <div className="px-6 py-5 space-y-4">
+                      <ProviderHealthPanel
+                        statuses={providerStatuses}
+                        loading={providerStatusLoading}
+                        onRefresh={refreshProviderStatuses}
+                      />
                       {config.registry.map(info => {
                         const draft = providerDrafts[info.name] ?? { base_url: '', api_key: '', use_proxy: false }
                         return (
@@ -1122,6 +1371,8 @@ export default function ConfigPage() {
                     </div>
                   </Card>
                 </section>
+
+                <LocalModelStoragePanel />
 
                 {/* ── MEMORY ───────────────────────────────────────── */}
                 <section id="memory">

@@ -334,6 +334,42 @@ def test_provider_validate_endpoint_uses_validation_helper(client):
     }
 
 
+def test_provider_storage_endpoint_lists_ollama_models(client):
+    from priests.service.routes import config as config_route
+
+    c, _ = client
+    with patch.object(
+        config_route,
+        "fetch_ollama_model_records",
+        return_value=[{"name": "llama3", "size": 1024, "digest": "abcdef", "modified_at": "2026-05-11T00:00:00Z"}],
+    ):
+        resp = c.get("/v1/providers/ollama/storage")
+
+    assert resp.status_code == 200
+    assert resp.json() == [{
+        "name": "llama3",
+        "size": 1024,
+        "digest": "abcdef",
+        "modified_at": "2026-05-11T00:00:00Z",
+    }]
+
+
+def test_provider_delete_local_model_checks_and_deletes_ollama_model(client):
+    from priests.service.routes import config as config_route
+
+    c, _ = client
+    with patch.object(
+        config_route,
+        "fetch_ollama_model_records",
+        return_value=[{"name": "llama3", "size": 1024}],
+    ), patch.object(config_route, "delete_ollama_model") as delete:
+        resp = c.delete("/v1/providers/ollama/models?model=llama3")
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] is True
+    delete.assert_called_once()
+
+
 def test_config_export_strips_secrets_and_includes_profiles(tmp_path):
     from priests.cli.config_cmd import config_export
 
