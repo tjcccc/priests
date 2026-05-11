@@ -36,7 +36,7 @@ uv sync
 priests init
 ```
 
-Walks you through selecting a provider, entering an API key, picking a model, and writing `~/.priests/priests.toml`.
+Walks you through selecting a provider, entering an API key or completing OAuth sign-in, picking a model, and writing `~/.priests/priests.toml`.
 
 ## Local development
 
@@ -151,13 +151,13 @@ Ctrl+J inserts a newline. Enter submits.
 | `bailian` | Alibaba Bailian | API | China mainland |
 | `alibaba_cloud` | Alibaba Cloud | API | International |
 | `kimi` | Kimi (Moonshot) | API | China mainland |
-| `github_copilot` | GitHub Copilot | OAuth | International |
+| `github_copilot` | GitHub Copilot (OAuth) | OAuth | International |
 | `chatgpt` | ChatGPT (OpenAI OAuth) | OAuth | International |
 | `custom` | Custom OpenAI-compatible endpoint | API | Any |
 
 Local providers (Ollama, llama.cpp, LM Studio, Rapid-MLX) require no API key and fetch available models automatically from the running server.
 
-GitHub Copilot OAuth uses the config UI device flow. After authorization, priests stores the GitHub device token and refreshes the short-lived Copilot IDE token before chat requests.
+GitHub Copilot OAuth uses a device flow in `priests init`, `priests model add`, and the config UI. After authorization, priests stores the GitHub device token and refreshes the short-lived Copilot IDE token before chat requests. ChatGPT OAuth opens an OpenAI sign-in URL with a localhost callback, stores the refresh token, and derives an OpenAI-compatible API credential from the sign-in; an OpenAI API key is still supported as a fallback.
 
 ## Config file
 

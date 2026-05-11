@@ -6,6 +6,7 @@ import re
 import time
 import uuid
 
+import anyio
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
@@ -33,6 +34,10 @@ from priests.providers.github_copilot_auth import (
     GitHubCopilotAuthError,
     exchange_github_token_for_copilot_token,
     looks_like_copilot_ide_token,
+)
+from priests.providers.chatgpt_auth import (
+    ChatGPTOAuthError,
+    refresh_chatgpt_access_token,
 )
 from priests.registry import REGISTRY
 from priests.service.routes.uploads import load_upload_images, save_turn_meta, update_turn_timestamps
@@ -234,6 +239,45 @@ async def _refresh_github_copilot_if_needed(request: Request, provider: str | No
     return None
 
 
+async def _refresh_chatgpt_if_needed(request: Request, provider: str | None) -> str | None:
+    if provider != "chatgpt":
+        return None
+
+    config: AppConfig = request.app.state.config
+    cfg = config.providers.chatgpt
+    if not cfg or not cfg.oauth_token:
+        return None
+
+    now = int(time.time())
+    should_refresh = not cfg.api_key or cfg.api_key_expires_at is None or cfg.api_key_expires_at <= now + 60
+    if not should_refresh:
+        return None
+
+    try:
+        refreshed = await anyio.to_thread.run_sync(refresh_chatgpt_access_token, cfg.oauth_token)
+    except ChatGPTOAuthError as exc:
+        return (
+            f"ChatGPT authorization could not be refreshed: {exc}. "
+            "Sign in with ChatGPT again in Configuration > Providers."
+        )
+
+    current = load_config()
+    existing = current.providers.chatgpt or cfg
+    current.providers.chatgpt = OpenAICompatConfig.model_validate(
+        {
+            "api_key": refreshed.api_key or existing.api_key or cfg.api_key or refreshed.access_token,
+            "base_url": existing.base_url or cfg.base_url,
+            "use_proxy": existing.use_proxy,
+            "oauth_token": refreshed.refresh_token,
+            "api_key_expires_at": refreshed.expires_at,
+        }
+    )
+    save_config(current)
+    request.app.state.config = current
+    request.app.state.engine._adapters = build_adapters(current)
+    return None
+
+
 async def _apply_memory(
     response: PriestResponse,
     body: RunRequest,
@@ -296,6 +340,8 @@ async def run_once(body: RunRequest, request: Request, memories: bool = True) ->
     priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images, memories=memories)
     if message := await _refresh_github_copilot_if_needed(request, priest_request.config.provider):
         raise HTTPException(status_code=400, detail={"code": "PROVIDER_AUTH_EXPIRED", "message": message})
+    if message := await _refresh_chatgpt_if_needed(request, priest_request.config.provider):
+        raise HTTPException(status_code=400, detail={"code": "PROVIDER_AUTH_EXPIRED", "message": message})
     config = request.app.state.config
     if message := _registered_provider_error(engine, config, priest_request.config.provider):
         raise HTTPException(status_code=400, detail={"code": "PROVIDER_NOT_CONFIGURED", "message": message})
@@ -329,6 +375,8 @@ async def chat(body: RunRequest, request: Request, memories: bool = True) -> Pri
     priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images, memories=memories)
     if message := await _refresh_github_copilot_if_needed(request, priest_request.config.provider):
         raise HTTPException(status_code=400, detail={"code": "PROVIDER_AUTH_EXPIRED", "message": message})
+    if message := await _refresh_chatgpt_if_needed(request, priest_request.config.provider):
+        raise HTTPException(status_code=400, detail={"code": "PROVIDER_AUTH_EXPIRED", "message": message})
     config = request.app.state.config
     if message := _registered_provider_error(engine, config, priest_request.config.provider):
         raise HTTPException(status_code=400, detail={"code": "PROVIDER_NOT_CONFIGURED", "message": message})
@@ -355,6 +403,9 @@ async def _sse_generator(body: RunRequest, request: Request, memories: bool):
     upload_images = await load_upload_images(db_path, body.upload_uuids)
     priest_request = _build_priest_request(body, config, guide=guide, upload_images=upload_images, memories=memories)
     if message := await _refresh_github_copilot_if_needed(request, priest_request.config.provider):
+        yield f"data: {json.dumps({'error': {'code': 'PROVIDER_AUTH_EXPIRED', 'message': message}})}\n\n"
+        return
+    if message := await _refresh_chatgpt_if_needed(request, priest_request.config.provider):
         yield f"data: {json.dumps({'error': {'code': 'PROVIDER_AUTH_EXPIRED', 'message': message}})}\n\n"
         return
     config = request.app.state.config

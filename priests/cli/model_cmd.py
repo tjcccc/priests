@@ -17,6 +17,7 @@ from priests.cli.init_cmd import (
     _apply_provider_to_config,
     _arrow_select,
     _select_openai_compat_local_model,
+    _prompt_provider_credentials,
     _register_model,
     _select_model,
     _select_ollama_model,
@@ -217,25 +218,29 @@ def _run_add_flow(config, config_file) -> tuple[str, str]:
         current_url = config.providers.ollama.base_url
         model, ollama_base_url = _select_ollama_model(current_url)
         config.providers.ollama.base_url = ollama_base_url
-        api_key = ""
-        custom_base_url = ""
+        credentials = None
     elif info.provider_type == "local" and info.known_models is None:
         current_cfg = getattr(config.providers, provider_name)
         model, base_url = _select_openai_compat_local_model(info.label, current_cfg.base_url)
         current_cfg.base_url = base_url
-        api_key = ""
-        custom_base_url = ""
+        credentials = None
     else:
-        custom_base_url = ""
-        if provider_name == "custom":
-            current_url = config.providers.custom.base_url if config.providers.custom else ""
-            custom_base_url = typer.prompt("Base URL", default=current_url or "https://").strip().rstrip("/")
-        api_key = ""
-        if info.needs_api_key:
-            api_key = typer.prompt("API key").strip()
+        current_custom_url = config.providers.custom.base_url if provider_name == "custom" and config.providers.custom else ""
+        credentials = _prompt_provider_credentials(provider_name, info, current_custom_url)
         model = _select_model(info)
 
-    _apply_provider_to_config(config.providers, provider_name, api_key, custom_base_url)
+    if credentials is None:
+        _apply_provider_to_config(config.providers, provider_name, "", "")
+    else:
+        _apply_provider_to_config(
+            config.providers,
+            provider_name,
+            credentials.api_key,
+            credentials.custom_base_url,
+            base_url=credentials.base_url,
+            oauth_token=credentials.oauth_token,
+            api_key_expires_at=credentials.api_key_expires_at,
+        )
     _register_model(config, provider_name, model)
     save_config(config, config_file)
 

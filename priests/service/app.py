@@ -33,6 +33,7 @@ def create_app(config: AppConfig) -> FastAPI:
         app.state.config = config
         # Expose raw db_path for the sessions list query
         app.state.db_path = config.paths.sessions_db.expanduser()
+        app.state.db_path.parent.mkdir(parents=True, exist_ok=True)
         await _ensure_table(str(app.state.db_path))
         await ensure_uploads_table(str(app.state.db_path))
         yield

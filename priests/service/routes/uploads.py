@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import sqlite3
 import uuid as _uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -68,10 +69,13 @@ async def save_turn_meta(db_path: str, session_id: str, model: str, elapsed_ms: 
     """Record model and timing for the last assistant turn in a session."""
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT timestamp FROM turns WHERE session_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
-            (session_id,),
-        )
+        try:
+            cursor = await db.execute(
+                "SELECT timestamp FROM turns WHERE session_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+                (session_id,),
+            )
+        except sqlite3.OperationalError:
+            return
         row = await cursor.fetchone()
         if row:
             await db.execute(
@@ -87,10 +91,13 @@ async def update_turn_timestamps(db_path: str, session_id: str, upload_uuids: li
         return
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT timestamp FROM turns WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1",
-            (session_id,),
-        )
+        try:
+            cursor = await db.execute(
+                "SELECT timestamp FROM turns WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1",
+                (session_id,),
+            )
+        except sqlite3.OperationalError:
+            return
         row = await cursor.fetchone()
         if row:
             ts = row["timestamp"]

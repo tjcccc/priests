@@ -361,8 +361,8 @@ async def start_github_copilot_device_flow() -> GitHubCopilotDeviceStartOut:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(
                 "https://github.com/login/device/code",
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
-                json={"client_id": _GITHUB_COPILOT_CLIENT_ID, "scope": _GITHUB_COPILOT_SCOPE},
+                headers={"Accept": "application/json", "User-Agent": "priests"},
+                data={"client_id": _GITHUB_COPILOT_CLIENT_ID, "scope": _GITHUB_COPILOT_SCOPE},
             )
     except httpx.RequestError as exc:
         raise HTTPException(status_code=502, detail=f"Could not start GitHub device flow: {exc}")
@@ -393,8 +393,8 @@ async def poll_github_copilot_device_flow(
         async with httpx.AsyncClient(timeout=10.0) as client:
             token_response = await client.post(
                 "https://github.com/login/oauth/access_token",
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
-                json={
+                headers={"Accept": "application/json", "User-Agent": "priests"},
+                data={
                     "client_id": _GITHUB_COPILOT_CLIENT_ID,
                     "device_code": body.device_code,
                     "grant_type": "urn:ietf:params:oauth:grant-type:device_code",

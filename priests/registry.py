@@ -213,8 +213,8 @@ REGISTRY: dict[str, ProviderInfo] = {
     # ── OAuth ──────────────────────────────────────────────────────────────
     "github_copilot": ProviderInfo(
         name="github_copilot",
-        label="GitHub Copilot",
-        needs_api_key=True,  # GitHub PAT or device-flow OAuth token
+        label="GitHub Copilot (OAuth)",
+        needs_api_key=True,  # GitHub device-flow OAuth token, PAT, or Copilot IDE token
         default_base_url="https://api.githubcopilot.com",
         known_models=[
             "gpt-5.5",
@@ -233,7 +233,7 @@ REGISTRY: dict[str, ProviderInfo] = {
     "chatgpt": ProviderInfo(
         name="chatgpt",
         label="ChatGPT (OpenAI OAuth)",
-        needs_api_key=True,  # OpenAI OAuth app token or API key from platform.openai.com
+        needs_api_key=True,  # OpenAI OAuth access token or API key from platform.openai.com
         default_base_url="https://api.openai.com/v1",
         known_models=[
             "gpt-5.5",

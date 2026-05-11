@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
@@ -20,10 +23,31 @@ from priests.config.model import (
     ServiceConfig,
 )
 from priests.engine_factory import _bootstrap_profiles
+from priests.providers.chatgpt_auth import (
+    ChatGPTOAuthError,
+    authorize_chatgpt_with_browser,
+)
+from priests.providers.github_copilot_auth import (
+    GitHubCopilotAuthError,
+    exchange_github_token_for_copilot_token,
+    looks_like_copilot_ide_token,
+)
 from priests.registry import ProviderInfo, get_provider, list_providers
 
 console = Console()
 err_console = Console(stderr=True)
+
+_GITHUB_COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
+_GITHUB_COPILOT_SCOPE = "read:user"
+
+
+@dataclass(frozen=True)
+class ProviderCredentials:
+    api_key: str = ""
+    custom_base_url: str = ""
+    base_url: str = ""
+    oauth_token: str = ""
+    api_key_expires_at: int | None = None
 
 
 def _arrow_select(prompt: str, choices: list[questionary.Choice]) -> str:
@@ -133,6 +157,202 @@ def _select_model(info: ProviderInfo) -> str:
     return selected
 
 
+def _prompt_secret(label: str) -> str:
+    """Prompt for a secret without echoing it in the terminal."""
+    return typer.prompt(label, hide_input=True).strip()
+
+
+async def _start_github_copilot_device_flow() -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                "https://github.com/login/device/code",
+                headers={"Accept": "application/json", "User-Agent": "priests"},
+                data={"client_id": _GITHUB_COPILOT_CLIENT_ID, "scope": _GITHUB_COPILOT_SCOPE},
+            )
+    except httpx.RequestError as exc:
+        raise GitHubCopilotAuthError(
+            f"Could not start GitHub device flow: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    if response.status_code != 200:
+        raise GitHubCopilotAuthError(
+            f"GitHub device flow failed: HTTP {response.status_code}: {response.text}"
+        )
+    return response.json()
+
+
+async def _poll_github_copilot_device_flow(device_code: str, interval: int, expires_in: int) -> str:
+    deadline = time.monotonic() + expires_in
+    poll_interval = max(interval, 1)
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        while time.monotonic() < deadline:
+            await asyncio.sleep(poll_interval)
+            try:
+                response = await client.post(
+                    "https://github.com/login/oauth/access_token",
+                    headers={"Accept": "application/json", "User-Agent": "priests"},
+                    data={
+                        "client_id": _GITHUB_COPILOT_CLIENT_ID,
+                        "device_code": device_code,
+                        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                    },
+                )
+            except httpx.RequestError as exc:
+                raise GitHubCopilotAuthError(
+                    f"Could not poll GitHub device flow: {type(exc).__name__}: {exc}"
+                ) from exc
+
+            if response.status_code != 200:
+                raise GitHubCopilotAuthError(
+                    f"GitHub device polling failed: HTTP {response.status_code}: {response.text}"
+                )
+
+            data = response.json()
+            if token := data.get("access_token"):
+                return token
+
+            error = data.get("error")
+            if error == "authorization_pending":
+                continue
+            if error == "slow_down":
+                poll_interval += 5
+                continue
+            if error == "expired_token":
+                raise GitHubCopilotAuthError("The device code expired. Start again.")
+            if error == "access_denied":
+                raise GitHubCopilotAuthError("Authorization was denied.")
+            raise GitHubCopilotAuthError(data.get("error_description") or error or "Authorization failed.")
+
+    raise GitHubCopilotAuthError("The device code expired. Start again.")
+
+
+async def _github_copilot_device_credentials() -> ProviderCredentials:
+    data = await _start_github_copilot_device_flow()
+    try:
+        device_code = data["device_code"]
+        user_code = data["user_code"]
+        verification_uri = data["verification_uri"]
+        expires_in = int(data.get("expires_in", 900))
+        interval = int(data.get("interval", 5))
+    except KeyError as exc:
+        raise GitHubCopilotAuthError(
+            f"GitHub device flow response missing {exc.args[0]!r}"
+        ) from exc
+
+    console.print("[bold]GitHub Copilot OAuth[/bold]")
+    console.print(f"Open: [bold]{verification_uri}[/bold]")
+    console.print(f"Enter code: [bold]{user_code}[/bold]")
+    console.print("[dim]Waiting for authorization...[/dim]")
+
+    github_token = await _poll_github_copilot_device_flow(device_code, interval, expires_in)
+    copilot = await exchange_github_token_for_copilot_token(github_token)
+    return ProviderCredentials(
+        api_key=copilot.token,
+        base_url=copilot.base_url,
+        oauth_token=github_token,
+        api_key_expires_at=copilot.expires_at,
+    )
+
+
+def _authorize_github_copilot_device() -> ProviderCredentials:
+    try:
+        return asyncio.run(_github_copilot_device_credentials())
+    except GitHubCopilotAuthError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+
+def _prompt_github_copilot_credentials(info: ProviderInfo) -> ProviderCredentials:
+    method = _arrow_select(
+        "GitHub Copilot authorization:",
+        [
+            questionary.Choice(title="Authorize with GitHub device code (OAuth)", value="device"),
+            questionary.Choice(title="Paste token manually", value="manual"),
+        ],
+    )
+
+    if method == "device":
+        return _authorize_github_copilot_device()
+
+    token_type = _arrow_select(
+        "Token type:",
+        [
+            questionary.Choice(title="GitHub OAuth/PAT token (exchange now)", value="github"),
+            questionary.Choice(title="Copilot IDE token (starts with tid=)", value="copilot"),
+        ],
+    )
+    token = _prompt_secret("Token")
+
+    if token_type == "copilot":
+        if not looks_like_copilot_ide_token(token):
+            err_console.print("[yellow]Token does not look like a Copilot IDE token; saving it anyway.[/yellow]")
+        return ProviderCredentials(api_key=token, base_url=info.default_base_url)
+
+    try:
+        copilot = asyncio.run(exchange_github_token_for_copilot_token(token))
+    except GitHubCopilotAuthError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    return ProviderCredentials(
+        api_key=copilot.token,
+        base_url=copilot.base_url,
+        oauth_token=token,
+        api_key_expires_at=copilot.expires_at,
+    )
+
+
+def _prompt_chatgpt_credentials(info: ProviderInfo) -> ProviderCredentials:
+    method = _arrow_select(
+        "ChatGPT credential:",
+        [
+            questionary.Choice(title="Sign in with ChatGPT in browser (OAuth)", value="oauth"),
+            questionary.Choice(title="Paste OpenAI API key", value="api_key"),
+        ],
+    )
+    if method == "oauth":
+        try:
+            tokens = authorize_chatgpt_with_browser()
+        except ChatGPTOAuthError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+        return ProviderCredentials(
+            api_key=tokens.api_key or tokens.access_token,
+            base_url=info.default_base_url,
+            oauth_token=tokens.refresh_token,
+            api_key_expires_at=tokens.expires_at,
+        )
+
+    return ProviderCredentials(api_key=_prompt_secret("OpenAI API key"), base_url=info.default_base_url)
+
+
+def _prompt_provider_credentials(
+    provider_name: str,
+    info: ProviderInfo,
+    current_custom_base_url: str = "",
+) -> ProviderCredentials:
+    custom_base_url = ""
+    if provider_name == "custom":
+        custom_base_url = typer.prompt(
+            "Base URL",
+            default=current_custom_base_url or "https://",
+        ).strip().rstrip("/")
+
+    if info.provider_type == "oauth":
+        if provider_name == "github_copilot":
+            return _prompt_github_copilot_credentials(info)
+        if provider_name == "chatgpt":
+            return _prompt_chatgpt_credentials(info)
+        return ProviderCredentials(api_key=_prompt_secret("OAuth token"), base_url=info.default_base_url)
+
+    if info.needs_api_key:
+        return ProviderCredentials(api_key=_prompt_secret("API key"), custom_base_url=custom_base_url)
+
+    return ProviderCredentials(custom_base_url=custom_base_url)
+
+
 def _register_model(config: AppConfig, provider: str, model: str) -> None:
     """Add provider/model to config.models.options if not already present."""
     entry = f"{provider}/{model}"
@@ -145,8 +365,12 @@ def _apply_provider_to_config(
     provider: str,
     api_key: str,
     custom_base_url: str,
+    *,
+    base_url: str = "",
+    oauth_token: str = "",
+    api_key_expires_at: int | None = None,
 ) -> None:
-    """Write api_key (and base_url for custom) into the providers config in-place."""
+    """Write credentials and provider base URL into the providers config in-place."""
     info = get_provider(provider)
     if provider == "anthropic":
         providers.anthropic = AnthropicConfig(api_key=api_key)
@@ -157,8 +381,20 @@ def _apply_provider_to_config(
         base_url = current.base_url if current else info.default_base_url
         setattr(providers, provider, OllamaConfig(base_url=base_url))
     elif provider != "ollama":
-        base_url = info.default_base_url if info else ""
-        setattr(providers, provider, OpenAICompatConfig(api_key=api_key, base_url=base_url))
+        default_base_url = info.default_base_url if info else ""
+        current = getattr(providers, provider, None)
+        use_proxy = current.use_proxy if isinstance(current, OpenAICompatConfig) else False
+        setattr(
+            providers,
+            provider,
+            OpenAICompatConfig(
+                api_key=api_key,
+                base_url=base_url or default_base_url,
+                use_proxy=use_proxy,
+                oauth_token=oauth_token,
+                api_key_expires_at=api_key_expires_at,
+            ),
+        )
 
 
 def init_command(
@@ -187,8 +423,7 @@ def init_command(
 
     # --- API key + model ---
     local_base_url = ""
-    api_key = ""
-    custom_base_url = ""
+    credentials = ProviderCredentials()
 
     if provider_name == "ollama":
         local_base_url = "http://localhost:11434"
@@ -197,10 +432,7 @@ def init_command(
         local_base_url = info.default_base_url
         model, local_base_url = _select_openai_compat_local_model(info.label, local_base_url)
     else:
-        if provider_name == "custom":
-            custom_base_url = typer.prompt("Base URL (e.g. https://my-server/v1)").strip().rstrip("/")
-        if info.needs_api_key:
-            api_key = typer.prompt("API key", hide_input=False).strip()
+        credentials = _prompt_provider_credentials(provider_name, info)
         model = _select_model(info)
 
     console.print()
@@ -218,7 +450,15 @@ def init_command(
         providers.ollama = OllamaConfig(base_url=local_base_url)
     elif info.provider_type == "local" and local_base_url:
         setattr(providers, provider_name, OllamaConfig(base_url=local_base_url))
-    _apply_provider_to_config(providers, provider_name, api_key, custom_base_url)
+    _apply_provider_to_config(
+        providers,
+        provider_name,
+        credentials.api_key,
+        credentials.custom_base_url,
+        base_url=credentials.base_url,
+        oauth_token=credentials.oauth_token,
+        api_key_expires_at=credentials.api_key_expires_at,
+    )
 
     config = AppConfig(
         default=DefaultsConfig(provider=provider_name, model=model),

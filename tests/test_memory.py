@@ -551,6 +551,20 @@ def test_extract_prompt_memories_finds_natural_user_facts(tmp_path):
     assert "green" in combined
 
 
+def test_extract_prompt_memories_finds_self_introduction_name(tmp_path):
+    entries = extract_prompt_memories("I'm Jack.")
+
+    assert len(entries) == 1
+    assert entries[0].kind == "user"
+    assert entries[0].conflict_key == "user.name"
+    assert entries[0].text == "The user's name is Jack."
+
+    saved = save_prompt_memories(tmp_path, "I am Jack.")
+    assert saved == 1
+    combined = "\n".join(assemble_memory_entries(tmp_path, prompt="Who am I?"))
+    assert "Jack" in combined
+
+
 def test_save_prompt_memories_updates_conflicting_natural_fact(tmp_path):
     save_prompt_memories(tmp_path, "My favorite color is yellow.")
     save_prompt_memories(tmp_path, "Actually, my favorite color is green, not yellow.")

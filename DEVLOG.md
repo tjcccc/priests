@@ -1,5 +1,15 @@
 # DEVLOG
 
+## 2026-05-11 — v0.26.0 — OAuth login and memory fallback
+
+- `priests init` and `priests model add` now handle OAuth providers separately: GitHub Copilot offers device-code authorization, while ChatGPT opens the OpenAI browser OAuth flow with a localhost callback and refreshes the saved sign-in credential before use
+- ChatGPT OAuth now follows the browser PKCE flow through ID-token exchange so the saved credential works with the OpenAI-compatible adapter
+- GitHub Copilot device authorization now uses GitHub's form-encoded OAuth device endpoints and prints clearer network errors
+- The memory prompt fallback now captures explicit self-introductions such as `I'm Jack` and `I am Jack` when a model omits a hidden memory block
+- Service startup and upload metadata writes now tolerate freshly-created or mocked session databases more robustly
+
+---
+
 ## 2026-05-11 — v0.25.0 — config UI provider polish
 
 - Wired provider health status into the Config page using the provider status API

@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Annotated
 
@@ -14,10 +15,11 @@ from prompt_toolkit.shortcuts import PromptSession
 from rich.console import Console
 from rich.markup import escape
 
-from priests.config.loader import load_config
-from priests.config.model import AppConfig
+from priests.config.loader import load_config, save_config
+from priests.config.model import AppConfig, OpenAICompatConfig
 from priests.engine_factory import NotInitializedError
 from priests.profile.config import resolve_provider_model
+from priests.providers.chatgpt_auth import ChatGPTOAuthError, refresh_chatgpt_access_token
 
 run_app = typer.Typer(help="Run a prompt or enter interactive chat.")
 
@@ -77,6 +79,39 @@ def _build_priest_config(config: AppConfig, provider: str | None, model: str | N
     )
 
 
+def _refresh_chatgpt_config_if_needed(
+    config: AppConfig,
+    config_file: Path | None,
+    provider_name: str | None,
+) -> bool:
+    if provider_name != "chatgpt":
+        return False
+    cfg = config.providers.chatgpt
+    if not cfg or not cfg.oauth_token:
+        return False
+    now = int(time.time())
+    if cfg.api_key and cfg.api_key_expires_at is not None and cfg.api_key_expires_at > now + 60:
+        return False
+    try:
+        refreshed = refresh_chatgpt_access_token(cfg.oauth_token)
+    except ChatGPTOAuthError as exc:
+        err_console.print(f"[red]ChatGPT authorization could not be refreshed:[/red] {escape(str(exc))}")
+        err_console.print("[yellow]Run priests model add and sign in with ChatGPT again.[/yellow]")
+        raise typer.Exit(1)
+
+    config.providers.chatgpt = OpenAICompatConfig.model_validate(
+        {
+            "api_key": refreshed.api_key or cfg.api_key or refreshed.access_token,
+            "base_url": cfg.base_url,
+            "use_proxy": cfg.use_proxy,
+            "oauth_token": refreshed.refresh_token,
+            "api_key_expires_at": refreshed.expires_at,
+        }
+    )
+    save_config(config, config_file)
+    return True
+
+
 def _build_memory_context(
     memories_dir: Path,
     size_limit: int,
@@ -103,6 +138,7 @@ async def _run_single(
     session_id: str | None,
     think: bool,
     memories: bool,
+    config_file: Path | None = None,
 ) -> None:
     import json
     import sys
@@ -119,6 +155,8 @@ async def _run_single(
     )
     from priests.profile.config import load_profile_config
 
+    resolved_provider, _ = resolve_provider_model(config, profile, provider, model)
+    _refresh_chatgpt_config_if_needed(config, config_file, resolved_provider)
     engine, store = await build_engine(config)
     priest_config = _build_priest_config(config, provider, model, profile, think)
 
@@ -301,6 +339,7 @@ async def _run_chat(
     session_id: str | None,
     think: bool,
     memories: bool | None,
+    config_file: Path | None = None,
 ) -> None:
     import json
     import sys as _sys
@@ -308,7 +347,7 @@ async def _run_chat(
 
     from priest import ImageInput, PriestConfig, PriestRequest, SessionRef
     from priest.errors import PriestError
-    from priests.engine_factory import build_engine, load_global_guide
+    from priests.engine_factory import build_adapters, build_engine, load_global_guide
     from priests.memory.extractor import (
         StreamingStripper, clean_last_turn, pop_last_exchange,
         append_memories, apply_memory_forget, apply_memory_proposals, save_memories,
@@ -319,6 +358,9 @@ async def _run_chat(
         USER_FILE, PREFERENCES_FILE,
     )
     from priests.profile.config import load_profile_config
+
+    resolved_provider, _ = resolve_provider_model(config, profile, provider, model)
+    _refresh_chatgpt_config_if_needed(config, config_file, resolved_provider)
 
     try:
         engine, store = await build_engine(config)
@@ -617,6 +659,9 @@ async def _run_chat(
 
             images = [ImageInput(path=p) for p in _pending_images]
 
+            if _refresh_chatgpt_config_if_needed(config, config_file, priest_config.provider):
+                engine._adapters = build_adapters(config)
+
             request = PriestRequest(
                 config=priest_config,
                 profile=profile,
@@ -784,13 +829,13 @@ def run(
     oneshot_memories: bool = memories_val if memories_val is not None else False
 
     if prompt is None and sys.stdin.isatty():
-        anyio.run(_run_chat, config, provider, model, effective_profile, session, resolved_think, memories_val)
+        anyio.run(_run_chat, config, provider, model, effective_profile, session, resolved_think, memories_val, config_file)
     elif prompt is None:
         # Piped input
         prompt = sys.stdin.read().strip()
         if not prompt:
             err_console.print("[red]No prompt provided.[/red]")
             raise typer.Exit(1)
-        anyio.run(_run_single, prompt, config, provider, model, effective_profile, session, resolved_think, oneshot_memories)
+        anyio.run(_run_single, prompt, config, provider, model, effective_profile, session, resolved_think, oneshot_memories, config_file)
     else:
-        anyio.run(_run_single, prompt, config, provider, model, effective_profile, session, resolved_think, oneshot_memories)
+        anyio.run(_run_single, prompt, config, provider, model, effective_profile, session, resolved_think, oneshot_memories, config_file)

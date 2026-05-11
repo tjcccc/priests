@@ -2,6 +2,20 @@
 
 All notable changes to `priests` are documented here.
 
+## [0.26.0] — 2026-05-11
+
+### Added
+- ChatGPT OAuth browser sign-in for `priests init` and `priests model add`, using a localhost callback and refreshable saved credentials
+- GitHub Copilot device-code authorization in `priests init` and `priests model add`
+
+### Changed
+- ChatGPT OAuth now exchanges the browser sign-in token into an OpenAI-compatible credential before saving it for model calls
+- GitHub Copilot device authorization now uses GitHub's form-encoded OAuth device endpoints
+
+### Fixed
+- Explicit self-introductions such as `I'm Jack` and `I am Jack` are now captured by the code-side memory fallback when the model does not emit a hidden memory block
+- Service startup and upload metadata writes now tolerate freshly-created or mocked session databases
+
 ## [0.25.0] — 2026-05-11
 
 ### Added

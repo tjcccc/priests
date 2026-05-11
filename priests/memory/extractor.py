@@ -913,6 +913,22 @@ def _extract_name_memory(prompt: str, body: str) -> MemoryEntry | None:
             reason="Runtime fallback extracted an explicit user name statement.",
             conflict_key="user.name",
         )
+    intro_match = re.search(r"\bi(?:'|’)?m\s+([^\n.!?。！？;；,，]{1,80})", body, flags=re.IGNORECASE)
+    if not intro_match:
+        intro_match = re.search(r"\bi\s+am\s+([^\n.!?。！？;；,，]{1,80})", body, flags=re.IGNORECASE)
+    if intro_match:
+        value = _clean_memory_value(intro_match.group(1))
+        first = value[:1]
+        if value and first.isupper() and len(value.split()) <= 6:
+            return _entry_from_prompt(
+                kind="user",
+                text=f"The user's name is {value}.",
+                priority=0,
+                stability="stable",
+                evidence=prompt,
+                reason="Runtime fallback extracted an explicit user name statement.",
+                conflict_key="user.name",
+            )
     return None
 
 
