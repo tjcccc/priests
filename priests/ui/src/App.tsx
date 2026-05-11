@@ -601,7 +601,7 @@ export default function App() {
           content: accumulated,
           timestamp: new Date().toISOString(),
           model: meta.model,
-          elapsed_ms: Date.now() - t0,
+          elapsed_ms: meta.elapsed_ms ?? Date.now() - t0,
         }])
         setStreamingContent('')
         setStreaming(false)

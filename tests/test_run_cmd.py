@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from unittest.mock import MagicMock, patch
 
 
@@ -108,7 +109,69 @@ def test_search_formats_results():
     assert "https://example.com/1" in result
     assert "Snippet one." in result
     assert "Result Two" in result
-    instance.text.assert_called_once_with("test query", max_results=2)
+    instance.text.assert_called_once_with("test query", region="us-en", max_results=2)
+
+
+def test_search_uses_chinese_region_for_cjk_queries():
+    from priests.search import search
+
+    cls, instance = _make_mock_ddgs([
+        {"title": "上海天气", "href": "https://example.com/weather", "body": "今日天气。"},
+    ])
+
+    with patch("ddgs.DDGS", cls):
+        search("上海天气", max_results=1)
+
+    instance.text.assert_called_once_with("上海天气", region="cn-zh", max_results=1)
+
+
+def test_format_search_context_tells_model_to_answer():
+    from priests.search import format_search_context
+
+    result = format_search_context("raw search results")
+
+    assert "raw search results" in result
+    assert "Do not emit another <search_query>" in result
+    assert "answer the user's current question" in result
+
+
+def test_should_fallback_to_search_detects_waiting_filler():
+    from priests.search import should_fallback_to_search
+
+    assert should_fallback_to_search("帮我查一下今天上海天气", "（正在查找-请稍等）")
+    assert should_fallback_to_search("search OpenClaw", "Searching, please wait")
+    assert not should_fallback_to_search("你好", "（正在查找-请稍等）")
+    assert not should_fallback_to_search("帮我查天气", "上海今天多云，气温 20 度。")
+
+
+async def test_save_cli_turn_meta_records_last_assistant(tmp_path):
+    from priest.session.sqlite_store import SqliteSessionStore
+    from priests.cli.run_cmd import _save_cli_turn_meta
+    from priests.config.model import AppConfig
+
+    db_path = tmp_path / "sessions.db"
+    config = AppConfig.model_validate({"paths": {"sessions_db": str(db_path)}})
+    store = SqliteSessionStore(db_path)
+    await store.init()
+    try:
+        session = await store.create("default", session_id="sess-1")
+        session.append_turn("user", "hi")
+        session.append_turn("assistant", "hello")
+        await store.save(session)
+    finally:
+        await store.close()
+
+    await _save_cli_turn_meta(config, "sess-1", "ollama/test", 1234)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT model, elapsed_ms FROM turn_meta WHERE session_id = ?",
+            ("sess-1",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("ollama/test", 1234)
 
 
 def test_search_empty_results():

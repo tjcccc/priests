@@ -53,6 +53,7 @@ export interface ModelsConfig {
 
 export interface StreamMeta {
   model?: string
+  elapsed_ms?: number
 }
 
 export interface UploadResult {

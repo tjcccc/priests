@@ -1,5 +1,13 @@
 # DEVLOG
 
+## 2026-05-11 — v0.26.1 — web search reliability
+
+- Web UI and HTTP service chats now honor enabled web search by running model-emitted `<search_query>` requests and re-asking with the search results
+- Web search results are now wrapped with answer-now guidance, CJK queries use a Chinese search region, and repeated or narrated search attempts no longer render as blank replies
+- CLI chat turns now record model/timing metadata for the Web UI session history, keeping mixed CLI/Web UI sessions consistent
+
+---
+
 ## 2026-05-11 — v0.26.0 — OAuth login and memory fallback
 
 - `priests init` and `priests model add` now handle OAuth providers separately: GitHub Copilot offers device-code authorization, while ChatGPT opens the OpenAI browser OAuth flow with a localhost callback and refreshes the saved sign-in credential before use

@@ -129,6 +129,12 @@ Inside `priests run` interactive mode:
 
 Ctrl+J inserts a newline. Enter submits.
 
+## Web search
+
+`priests` owns web search as an application feature, not as a native feature of every provider. In the CLI, `/search <query>` forces a search and injects the results into the next message. When `[web_search] enabled = true`, CLI and HTTP/Web UI chats can also let the model request a search by emitting a hidden `<search_query>...</search_query>` block; `priests` runs the search, strips the hidden block, and re-asks the model with the results.
+
+This requires the optional search dependencies, such as installing `priests[search]`, and the model still decides when search is needed unless you use the explicit CLI `/search` command.
+
 ## Supported providers
 
 | Key | Provider | Type | Region |

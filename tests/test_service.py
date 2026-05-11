@@ -258,6 +258,62 @@ def test_run_refreshes_expired_github_copilot_token(client):
     save.assert_called_once()
 
 
+def test_run_model_requested_web_search_reasks_with_results(client):
+    c, engine, store = client
+    engine.run = AsyncMock(side_effect=[
+        _ok_response("<search_query>latest gpt-5 mini news</search_query>"),
+        _ok_response("Search-backed answer."),
+    ])
+
+    with patch("priests.search.search", return_value="## Web search results\n\nResult body.") as search, \
+         patch("priests.service.routes.run.pop_last_exchange", new=AsyncMock()) as pop:
+        resp = c.post("/v1/run", json={"prompt": "What changed today?", "session_id": "sess-1"})
+
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "Search-backed answer."
+    search.assert_called_once_with("latest gpt-5 mini news", c.app.state.config.web_search.max_results)
+    pop.assert_awaited_once_with(store, "sess-1")
+    assert engine.run.await_count == 2
+    first_request = engine.run.await_args_list[0].args[0]
+    second_request = engine.run.await_args_list[1].args[0]
+    assert any("Web search is available" in item for item in first_request.context)
+    assert len(second_request.user_context) == 1
+    assert "## Web search results\n\nResult body." in second_request.user_context[0]
+    assert "Do not emit another <search_query>" in second_request.user_context[0]
+
+
+def test_run_model_requested_web_search_returns_fallback_for_repeated_search(client):
+    c, engine, _ = client
+    engine.run = AsyncMock(side_effect=[
+        _ok_response("<search_query>latest gpt-5 mini news</search_query>"),
+        _ok_response("<search_query>latest gpt-5 mini weather</search_query>"),
+    ])
+
+    with patch("priests.search.search", return_value="## Web search results\n\nResult body."), \
+         patch("priests.service.routes.run.pop_last_exchange", new=AsyncMock()):
+        resp = c.post("/v1/run", json={"prompt": "What changed today?", "session_id": "sess-1"})
+
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "Web search completed, but the model requested another search instead of answering."
+
+
+def test_run_search_wait_filler_reasks_with_prompt_query(client):
+    c, engine, store = client
+    engine.run = AsyncMock(side_effect=[
+        _ok_response("（正在查找-请稍等）"),
+        _ok_response("上海今天多云。"),
+    ])
+
+    with patch("priests.search.search", return_value="## Web search results\n\n上海天气结果。") as search, \
+         patch("priests.service.routes.run.pop_last_exchange", new=AsyncMock()) as pop:
+        resp = c.post("/v1/run", json={"prompt": "帮我查一下今天上海天气", "session_id": "sess-1"})
+
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "上海今天多云。"
+    search.assert_called_once_with("帮我查一下今天上海天气", c.app.state.config.web_search.max_results)
+    pop.assert_awaited_once_with(store, "sess-1")
+
+
 def test_run_assembles_profile_memory_into_request_memory(client, tmp_path):
     c, engine, _ = client
     profile_dir = tmp_path / "coder"
@@ -490,6 +546,71 @@ def test_run_stream_error_yields_error_event(client):
     assert any("error" in p for p in payloads)
     # [DONE] must NOT appear after an error
     assert "[DONE]" not in payloads
+
+
+def test_run_stream_model_requested_web_search_reasks_with_results(client):
+    c, engine, store = client
+    engine.stream = MagicMock(side_effect=[
+        _agen("<search_query>latest gpt-5 mini news</search_query>"),
+        _agen("Search-backed stream."),
+    ])
+
+    with patch("priests.search.search", return_value="## Web search results\n\nResult body.") as search, \
+         patch("priests.service.routes.run.pop_last_exchange", new=AsyncMock()) as pop:
+        resp = c.post("/v1/run/stream", json={"prompt": "What changed today?", "session_id": "sess-1"})
+
+    assert resp.status_code == 200
+    search.assert_called_once_with("latest gpt-5 mini news", c.app.state.config.web_search.max_results)
+    pop.assert_awaited_once_with(store, "sess-1")
+    assert engine.stream.call_count == 2
+    second_request = engine.stream.call_args_list[1].args[0]
+    assert len(second_request.user_context) == 1
+    assert "## Web search results\n\nResult body." in second_request.user_context[0]
+    assert "Do not emit another <search_query>" in second_request.user_context[0]
+    lines = [l for l in resp.text.splitlines() if l.startswith("data:")]
+    payloads = [l[len("data: "):] for l in lines]
+    parsed = [json.loads(p) for p in payloads if p != "[DONE]"]
+    deltas = [p["delta"] for p in parsed if "delta" in p]
+    assert "".join(deltas) == "Search-backed stream."
+    assert payloads[-1] == "[DONE]"
+
+
+def test_run_stream_model_requested_web_search_fallback_for_repeated_search(client):
+    c, engine, _ = client
+    engine.stream = MagicMock(side_effect=[
+        _agen("<search_query>latest gpt-5 mini news</search_query>"),
+        _agen("<search_query>latest gpt-5 mini weather</search_query>"),
+    ])
+
+    with patch("priests.search.search", return_value="## Web search results\n\nResult body."), \
+         patch("priests.service.routes.run.pop_last_exchange", new=AsyncMock()):
+        resp = c.post("/v1/run/stream", json={"prompt": "What changed today?", "session_id": "sess-1"})
+
+    assert resp.status_code == 200
+    assert "Web search completed, but the model requested another search instead of answering." in resp.text
+    assert resp.text.strip().endswith("[DONE]")
+
+
+def test_run_stream_search_wait_filler_reasks_with_prompt_query(client):
+    c, engine, store = client
+    engine.stream = MagicMock(side_effect=[
+        _agen("（正在查找-请稍等）"),
+        _agen("上海今天多云。"),
+    ])
+
+    with patch("priests.search.search", return_value="## Web search results\n\n上海天气结果。") as search, \
+         patch("priests.service.routes.run.pop_last_exchange", new=AsyncMock()) as pop:
+        resp = c.post("/v1/run/stream", json={"prompt": "帮我查一下今天上海天气", "session_id": "sess-1"})
+
+    assert resp.status_code == 200
+    search.assert_called_once_with("帮我查一下今天上海天气", c.app.state.config.web_search.max_results)
+    pop.assert_awaited_once_with(store, "sess-1")
+    lines = [l for l in resp.text.splitlines() if l.startswith("data:")]
+    payloads = [l[len("data: "):] for l in lines]
+    parsed = [json.loads(p) for p in payloads if p != "[DONE]"]
+    deltas = [p["delta"] for p in parsed if "delta" in p]
+    assert "".join(deltas) == "（正在查找-请稍等）\n\n上海今天多云。"
+    assert resp.text.strip().endswith("[DONE]")
 
 
 # ---------------------------------------------------------------------------

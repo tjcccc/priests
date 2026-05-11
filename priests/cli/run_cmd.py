@@ -129,6 +129,21 @@ def _build_memory_context(
     return build_memory_instructions()
 
 
+def _model_label(provider: str | None, model: str | None) -> str:
+    return f"{provider or 'default'}/{model or 'default'}"
+
+
+async def _save_cli_turn_meta(config: AppConfig, session_id: str, model: str, elapsed_ms: int) -> None:
+    """Persist CLI turn metadata for the Web UI session detail view."""
+    try:
+        from priests.service.routes.uploads import ensure_uploads_table, save_turn_meta
+        db_path = str(config.paths.sessions_db.expanduser())
+        await ensure_uploads_table(db_path)
+        await save_turn_meta(db_path, session_id, model, elapsed_ms)
+    except Exception:
+        return
+
+
 async def _run_single(
     prompt: str,
     config: AppConfig,
@@ -192,6 +207,7 @@ async def _run_single(
     )
 
     start_ms = int(__import__("time").monotonic() * 1000)
+    latency_ms: int | None = None
     try:
         async with store:
             try:
@@ -211,11 +227,19 @@ async def _run_single(
 
             if request.session:
                 await clean_last_turn(store, request.session.id)
+                latency_ms = int(__import__("time").monotonic() * 1000) - start_ms
+                await _save_cli_turn_meta(
+                    config,
+                    request.session.id,
+                    _model_label(priest_config.provider, priest_config.model),
+                    latency_ms,
+                )
     except NotInitializedError as e:
         err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
 
-    latency_ms = int(__import__("time").monotonic() * 1000) - start_ms
+    if latency_ms is None:
+        latency_ms = int(__import__("time").monotonic() * 1000) - start_ms
     console.print()  # newline after streamed output
     console.print(f"[dim]({latency_ms}ms · {priest_config.provider}/{priest_config.model} · {profile})[/dim]")
 
@@ -549,8 +573,8 @@ async def _run_chat(
                     else:
                         console.print(f"[dim]Searching: {query}…[/dim]")
                         try:
-                            from priests.search import search as _do_search
-                            _search_context = _do_search(query, config.web_search.max_results)
+                            from priests.search import format_search_context, search as _do_search
+                            _search_context = format_search_context(_do_search(query, config.web_search.max_results))
                             console.print("[dim]Results ready — they will be included in your next message.[/dim]")
                         except RuntimeError as e:
                             err_console.print(f"[red]{escape(str(e))}[/red]")
@@ -673,7 +697,9 @@ async def _run_chat(
                 images=images,
             )
 
+            turn_start_ms = int(time.monotonic() * 1000)
             header_printed = False
+            visible_parts: list[str] = []
             stripper = StreamingStripper()
             try:
                 async for chunk in engine.stream(request):
@@ -681,6 +707,7 @@ async def _run_chat(
                     if not header_printed:
                         safe = safe.lstrip("\n")
                     if safe:
+                        visible_parts.append(safe)
                         if not header_printed:
                             _sys.stdout.write(f"{_BOLD}{profile} >{_RESET} ")
                             header_printed = True
@@ -690,6 +717,7 @@ async def _run_chat(
                 if not header_printed:
                     tail = tail.lstrip("\n")
                 if tail:
+                    visible_parts.append(tail)
                     if not header_printed:
                         _sys.stdout.write(f"{_BOLD}{profile} >{_RESET} ")
                         header_printed = True
@@ -745,14 +773,28 @@ async def _run_chat(
                 request = tool_request
                 return new_stripper, hp
 
+            ran_web_search = False
+            fallback_search = False
             if config.web_search.enabled and stripper.search_query and not header_printed:
                 query = stripper.search_query.strip()
+            elif config.web_search.enabled:
+                from priests.search import should_fallback_to_search
+                fallback_search = should_fallback_to_search(raw, "".join(visible_parts))
+                query = raw if fallback_search else ""
+            else:
+                query = ""
+
+            if query:
+                if fallback_search and header_printed:
+                    _sys.stdout.write("\n")
+                    _sys.stdout.flush()
                 console.print(f"[dim]Searching: {query}…[/dim]")
                 try:
-                    from priests.search import search as _do_search
-                    tool_ctx = _do_search(query, config.web_search.max_results)
+                    from priests.search import format_search_context, search as _do_search
+                    tool_ctx = format_search_context(_do_search(query, config.web_search.max_results))
                 except Exception as _se:
-                    tool_ctx = f"Search failed: {_se}"
+                    tool_ctx = f"Search failed: {_se}. Answer the user by explaining that web search failed."
+                ran_web_search = True
                 stripper, header_printed = await _agentic_rerun(tool_ctx)
 
             elif stripper.read_file_path and not header_printed:
@@ -774,7 +816,13 @@ async def _run_chat(
                 stripper, header_printed = await _agentic_rerun(tool_ctx)
 
             if not header_printed:
-                _sys.stdout.write(f"{_BOLD}{profile} >{_RESET}\n")
+                if ran_web_search:
+                    fallback = "Web search completed, but the model returned no visible answer."
+                    if stripper.search_query:
+                        fallback = "Web search completed, but the model requested another search instead of answering."
+                    _sys.stdout.write(f"{_BOLD}{profile} >{_RESET} {fallback}")
+                else:
+                    _sys.stdout.write(f"{_BOLD}{profile} >{_RESET}\n")
             _sys.stdout.write("\n\n")
             _sys.stdout.flush()
 
@@ -789,6 +837,13 @@ async def _run_chat(
 
             if request.session:
                 await clean_last_turn(store, request.session.id)
+                elapsed_ms = int(time.monotonic() * 1000) - turn_start_ms
+                await _save_cli_turn_meta(
+                    config,
+                    request.session.id,
+                    _model_label(priest_config.provider, priest_config.model),
+                    elapsed_ms,
+                )
 
             if memories_on:
                 try:

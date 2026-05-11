@@ -24,6 +24,7 @@ from priests.memory.extractor import (
     build_memory_instructions,
     clean_last_turn,
     forget_prompt_memories,
+    pop_last_exchange,
     save_memories,
     save_prompt_memories,
     should_inject_memory_instructions,
@@ -51,6 +52,17 @@ _PROPOSAL_RE = re.compile(r"<memory_proposal>(.*?)</memory_proposal>", re.DOTALL
 _FORGET_RE = re.compile(r"<memory_forget>(.*?)</memory_forget>", re.DOTALL | re.IGNORECASE)
 _CONSOLIDATION_RE = re.compile(r"<memory_consolidation>(.*?)</memory_consolidation>", re.DOTALL | re.IGNORECASE)
 _COPILOT_REFRESH_SKEW_SECONDS = 300
+
+
+def _web_search_context(config: AppConfig) -> str:
+    if not config.web_search.enabled:
+        return ""
+    return (
+        "Web search is available when current or external information is needed. "
+        "To request it, emit <search_query>your query</search_query> and nothing else. "
+        "The system runs the search and re-prompts you with results. "
+        "Do NOT narrate or simulate a search."
+    )
 
 
 def _strip_memory_blocks(text: str) -> str:
@@ -111,7 +123,13 @@ def _build_priest_request(
             create_if_missing=body.create_session_if_missing,
         )
 
-    base_context = ["Running inside priests service.", *body.system_context, *body.context]
+    search_context = _web_search_context(config)
+    base_context = [
+        "Running inside priests service.",
+        *([search_context] if search_context else []),
+        *body.system_context,
+        *body.context,
+    ]
     if guide:
         base_context = [guide, *base_context]
 
@@ -323,6 +341,74 @@ async def _apply_memory(
     return response.model_copy(update={"text": visible_text})
 
 
+async def _web_search_result_from_stripper(
+    stripper: StreamingStripper,
+    config: AppConfig,
+) -> str | None:
+    if config.web_search.enabled and stripper.search_query:
+        query = stripper.search_query.strip()
+        return await _web_search_result_for_query(query, config)
+
+    return None
+
+
+async def _web_search_result_for_query(query: str, config: AppConfig) -> str | None:
+    query = query.strip()
+    if not config.web_search.enabled or not query:
+        return None
+    try:
+        from priests.search import format_search_context, search as _do_search
+        search_results = await anyio.to_thread.run_sync(_do_search, query, config.web_search.max_results)
+        return format_search_context(search_results)
+    except Exception as exc:
+        return f"Search failed: {exc}. Answer the user by explaining that web search failed."
+
+
+async def _run_with_web_search(
+    engine,
+    priest_request: PriestRequest,
+    config: AppConfig,
+    store,
+) -> PriestResponse:
+    response = await engine.run(priest_request)
+    if not response.ok:
+        return response
+
+    text = response.text or ""
+    stripper = StreamingStripper()
+    visible_text = stripper.feed(text) + stripper.flush()
+    if visible_text.strip():
+        from priests.search import should_fallback_to_search
+        if not should_fallback_to_search(priest_request.prompt, visible_text):
+            return response
+        search_context = await _web_search_result_for_query(priest_request.prompt, config)
+    else:
+        search_context = await _web_search_result_from_stripper(stripper, config)
+    if not search_context:
+        return response
+
+    if priest_request.session:
+        await pop_last_exchange(store, priest_request.session.id)
+
+    search_request = priest_request.model_copy(
+        update={"user_context": [*priest_request.user_context, search_context]}
+    )
+    search_response = await engine.run(search_request)
+    if not search_response.ok:
+        return search_response
+
+    second_text = search_response.text or ""
+    second_stripper = StreamingStripper()
+    second_visible_text = second_stripper.feed(second_text) + second_stripper.flush()
+    if second_visible_text.strip():
+        return search_response
+
+    fallback = "Web search completed, but the model returned no visible answer."
+    if second_stripper.search_query:
+        fallback = "Web search completed, but the model requested another search instead of answering."
+    return search_response.model_copy(update={"text": fallback})
+
+
 def _model_label(req) -> str:
     provider = req.config.provider or "default"
     model = req.config.model or "default"
@@ -347,7 +433,7 @@ async def run_once(body: RunRequest, request: Request, memories: bool = True) ->
         raise HTTPException(status_code=400, detail={"code": "PROVIDER_NOT_CONFIGURED", "message": message})
     store = request.app.state.store
     t0 = time.monotonic()
-    response = await engine.run(priest_request)
+    response = await _run_with_web_search(engine, priest_request, config, store)
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     if not response.ok:
         raise HTTPException(status_code=500, detail={"code": response.error.code, "message": response.error.message})
@@ -381,7 +467,7 @@ async def chat(body: RunRequest, request: Request, memories: bool = True) -> Pri
     if message := _registered_provider_error(engine, config, priest_request.config.provider):
         raise HTTPException(status_code=400, detail={"code": "PROVIDER_NOT_CONFIGURED", "message": message})
     t0 = time.monotonic()
-    response = await engine.run(priest_request)
+    response = await _run_with_web_search(engine, priest_request, config, store)
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     if not response.ok:
         raise HTTPException(status_code=500, detail={"code": response.error.code, "message": response.error.message})
@@ -414,20 +500,66 @@ async def _sse_generator(body: RunRequest, request: Request, memories: bool):
         return
     stripper = StreamingStripper()
     t0 = time.monotonic()
+    header_printed = False
+    visible_parts: list[str] = []
 
     try:
         async for chunk in engine.stream(priest_request):
             safe = stripper.feed(chunk)
             if safe:
+                header_printed = True
+                visible_parts.append(safe)
                 yield f"data: {json.dumps({'delta': safe})}\n\n"
         tail = stripper.flush()
         if tail:
+            header_printed = True
+            visible_parts.append(tail)
             yield f"data: {json.dumps({'delta': tail})}\n\n"
     except Exception as exc:
         code = getattr(exc, "code", "UNKNOWN_ERROR")
         msg = getattr(exc, "message", str(exc))
         yield f"data: {json.dumps({'error': {'code': code, 'message': msg}})}\n\n"
         return
+
+    search_context = None
+    if not header_printed:
+        search_context = await _web_search_result_from_stripper(stripper, config)
+    else:
+        from priests.search import should_fallback_to_search
+        if should_fallback_to_search(body.prompt, "".join(visible_parts)):
+            search_context = await _web_search_result_for_query(body.prompt, config)
+
+    if search_context:
+        if priest_request.session:
+            await pop_last_exchange(store, priest_request.session.id)
+        priest_request = priest_request.model_copy(
+            update={"user_context": [*priest_request.user_context, search_context]}
+        )
+        stripper = StreamingStripper()
+        if header_printed:
+            yield f"data: {json.dumps({'delta': chr(10) * 2})}\n\n"
+        header_printed = False
+        try:
+            async for chunk in engine.stream(priest_request):
+                safe = stripper.feed(chunk)
+                if safe:
+                    header_printed = True
+                    yield f"data: {json.dumps({'delta': safe})}\n\n"
+            tail = stripper.flush()
+            if tail:
+                header_printed = True
+                yield f"data: {json.dumps({'delta': tail})}\n\n"
+        except Exception as exc:
+            code = getattr(exc, "code", "UNKNOWN_ERROR")
+            msg = getattr(exc, "message", str(exc))
+            yield f"data: {json.dumps({'error': {'code': code, 'message': msg}})}\n\n"
+            return
+        if not header_printed:
+            fallback = "Web search completed, but the model returned no visible answer."
+            if stripper.search_query:
+                fallback = "Web search completed, but the model requested another search instead of answering."
+            header_printed = True
+            yield f"data: {json.dumps({'delta': fallback})}\n\n"
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)
 
@@ -462,7 +594,7 @@ async def _sse_generator(body: RunRequest, request: Request, memories: bool):
 
     provider = priest_request.config.provider or "default"
     model = priest_request.config.model or "default"
-    yield f"data: {json.dumps({'metadata': {'model': f'{provider}/{model}'}})}\n\n"
+    yield f"data: {json.dumps({'metadata': {'model': f'{provider}/{model}', 'elapsed_ms': elapsed_ms}})}\n\n"
     yield "data: [DONE]\n\n"
 
 
