@@ -119,3 +119,27 @@ class ConfigPatchRequest(BaseModel):
 
 class ConfigPatchResponse(BaseModel):
     needs_restart: bool
+
+
+class ProviderStatusOut(BaseModel):
+    name: str
+    label: str
+    provider_type: str
+    configured: bool
+    reachable: bool | None
+    base_url: str
+    model_count: int | None
+    message: str
+
+
+class ProviderValidateIn(BaseModel):
+    provider: str
+    model: str
+
+
+class ProviderValidateOut(BaseModel):
+    provider: str
+    model: str
+    valid: bool
+    status: str
+    message: str

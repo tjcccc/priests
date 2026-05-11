@@ -7,6 +7,7 @@ from pydantic import BaseModel  # noqa: F401 (used by inline schema classes belo
 from priests.config.loader import load_config, save_config
 from priests.config.model import AppConfig, OpenAICompatConfig
 from priests.engine_factory import build_adapters
+from priests.provider_status import provider_status_async, validate_model
 from priests.providers.github_copilot_auth import (
     GitHubCopilotAuthError,
     exchange_github_token_for_copilot_token,
@@ -16,8 +17,11 @@ from priests.service.schemas import (
     ConfigPatchRequest,
     ConfigPatchResponse,
     ConfigResponse,
+    ProviderStatusOut,
     ProviderConfigOut,
     ProviderRegistryItem,
+    ProviderValidateIn,
+    ProviderValidateOut,
 )
 
 router = APIRouter()
@@ -265,6 +269,41 @@ async def get_provider_models(name: str, request: Request) -> list[str]:
         return []
 
     return []
+
+
+@router.get("/providers/status", response_model=list[ProviderStatusOut])
+async def get_provider_status(request: Request) -> list[ProviderStatusOut]:
+    """Return provider configuration and local reachability status."""
+    config: AppConfig = request.app.state.config
+    rows = []
+    for name in REGISTRY:
+        status = await provider_status_async(config, name)
+        rows.append(
+            ProviderStatusOut(
+                name=status.name,
+                label=status.label,
+                provider_type=status.provider_type,
+                configured=status.configured,
+                reachable=status.reachable,
+                base_url=status.base_url,
+                model_count=status.model_count,
+                message=status.message,
+            )
+        )
+    return rows
+
+
+@router.post("/providers/validate", response_model=ProviderValidateOut)
+async def validate_provider_model(body: ProviderValidateIn, request: Request) -> ProviderValidateOut:
+    """Validate a provider/model pair against config, local health, and curated model lists."""
+    result = validate_model(request.app.state.config, body.provider, body.model)
+    return ProviderValidateOut(
+        provider=result.provider,
+        model=result.model,
+        valid=result.valid,
+        status=result.status,
+        message=result.message,
+    )
 
 
 @router.post("/providers/github_copilot/device/start", response_model=GitHubCopilotDeviceStartOut)

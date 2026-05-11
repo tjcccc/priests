@@ -83,3 +83,47 @@ def test_model_default_profile_invalid_name_exits(tmp_path):
         model_cmd.model_default(profile="missing", config_file=config_path)
 
     assert exc.value.exit_code == 1
+
+
+def test_model_validate_uses_default_model(tmp_path, monkeypatch):
+    from priests.cli import model_cmd
+    from priests.provider_status import ModelValidation
+
+    config_path = tmp_path / "priests.toml"
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    _write_config(config_path, profiles_dir, options=["ollama/llama3"])
+
+    seen = {}
+
+    def fake_validate(_config, provider, model):
+        seen["provider"] = provider
+        seen["model"] = model
+        return ModelValidation(provider, model, True, "ok", "valid")
+
+    monkeypatch.setattr(model_cmd, "validate_model", fake_validate)
+
+    model_cmd.model_validate(config_file=config_path)
+
+    assert seen == {"provider": "ollama", "model": "llama3"}
+
+
+def test_model_validate_invalid_pair_exits(tmp_path, monkeypatch):
+    from priests.cli import model_cmd
+    from priests.provider_status import ModelValidation
+
+    config_path = tmp_path / "priests.toml"
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    _write_config(config_path, profiles_dir)
+
+    monkeypatch.setattr(
+        model_cmd,
+        "validate_model",
+        lambda _config, provider, model: ModelValidation(provider, model, False, "error", "missing"),
+    )
+
+    with pytest.raises(typer.Exit) as exc:
+        model_cmd.model_validate(model="ollama/missing", config_file=config_path)
+
+    assert exc.value.exit_code == 1

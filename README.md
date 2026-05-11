@@ -1,11 +1,17 @@
 # priests
 
-CLI tool and HTTP service for [priest](https://github.com/tjcccc/priest) AI orchestration.
+CLI-first showcase chat app for [priest](https://github.com/tjcccc/priest), centered on **spmem (Structured Personal Memory)** and reusable profiles. The CLI is the core showcase surface, the FastAPI HTTP service can power other apps, and the web UI is a browser showcase built on that service.
+
+## Core ideas
+
+- **spmem (Structured Personal Memory)** — profile-scoped memory for user facts, preferences, and short-term commitments. It stores rich JSONL records, recalls selectively, and keeps prompt context small.
+- **Profiles** — reusable chat contexts with their own prompts, rules, model overrides, sessions, and memories.
 
 ## What it does
 
 - `priests run` — interactive chat or single-prompt CLI
 - `priests service start` — FastAPI HTTP service (`POST /v1/run`, `POST /v1/chat`, session management)
+- Web UI — browser chat app at `/ui` with profiles, sessions, provider/model config, uploads, and memory behavior
 - Profile management, config management, provider and model setup
 
 ## Requirements
@@ -71,11 +77,16 @@ priests model list               # list saved models
 priests model default            # interactively pick a new default
 priests model default --profile coder  # set/clear the model override for a profile
 priests model add                # add a new provider + model
+priests model validate           # validate the default provider/model
+priests model validate ollama/qwen3:8b
 
 # Provider info
 priests provider                 # show current provider
 priests provider list            # list all providers with configured status
 priests provider <name> list     # show known models for a provider
+priests provider status          # show configured/reachable provider status
+priests provider storage         # list local Ollama model storage
+priests provider delete-local-model qwen3:8b --yes
 
 # Profile management
 priests profile                  # show current profile
@@ -86,6 +97,8 @@ priests profile init my_profile
 # Config
 priests config show
 priests config set default.model qwen-plus
+priests config export ~/priests-backup.zip
+priests config import ~/priests-backup.zip --overwrite
 
 # HTTP service (foreground)
 priests service start
@@ -264,9 +277,9 @@ model = "qwen-plus"
 memories = true
 ```
 
-## Memory system
+## spmem: Structured Personal Memory
 
-priests owns the chat-app memory policy and passes assembled memory to `priest` through the special request `memory` lane. The core `priest` framework remains generic; it does not decide what `user.jsonl`, `preferences.jsonl`, or `auto_short.jsonl` mean.
+spmem is the profile-scoped memory layer owned by priests. It passes assembled memory to `priest` through the special request `memory` lane while keeping the core `priest` framework generic; `priest` does not decide what `user.jsonl`, `preferences.jsonl`, or `auto_short.jsonl` mean.
 
 Profile files and memory files have different authority:
 
@@ -353,6 +366,8 @@ GET  /v1/sessions/{id}              get session with full turn history
 GET  /v1/config                     get full config (API keys masked)
 PATCH /v1/config                    partial config update (dotted keys)
 GET  /v1/providers/{name}/models    list available models for a provider
+GET  /v1/providers/status           provider config and local reachability status
+POST /v1/providers/validate         validate a provider/model pair
 GET  /v1/profiles                   list profiles
 GET  /v1/profiles/{name}            get profile files
 PUT  /v1/profiles/{name}            update profile files

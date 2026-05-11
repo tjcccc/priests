@@ -1,5 +1,15 @@
 # DEVLOG
 
+## 2026-05-11 — v0.24.0 — non-UI polish foundations
+
+- Added provider status and provider/model validation primitives for CLI and HTTP service use
+- Added `priests model validate`, `priests provider status`, `priests provider storage`, and guarded Ollama local-model deletion
+- Added `GET /v1/providers/status` and `POST /v1/providers/validate` for future config UI health/validation wiring
+- Added `priests config export` and `priests config import` for portable config/profile archives, with secrets stripped by default
+- Updated docs and TODO to keep remaining polish focused on UI wiring and first-run experience
+
+---
+
 ## 2026-05-10 — v0.23.0 — SPM reliability and budget hardening
 
 - Added `/delete-memory <query>` and `POST /v1/profiles/{name}/memories/delete` for permanent profile-scoped JSONL deletion, keeping `/forget` as soft supersession

@@ -2,6 +2,18 @@
 
 All notable changes to `priests` are documented here.
 
+## [0.24.0] — 2026-05-11
+
+### Added
+- Provider status and provider/model validation primitives for CLI and HTTP service use
+- `priests model validate`, `priests provider status`, `priests provider storage`, and guarded Ollama local-model deletion
+- `GET /v1/providers/status` and `POST /v1/providers/validate` for future config UI health and validation wiring
+- `priests config export` and `priests config import` for portable config/profile archives, with secrets stripped by default
+
+### Changed
+- README and TODO now position `priests` as a CLI-first showcase chat app centered on spmem and reusable profiles
+- Remaining showcase polish tasks are scoped to UI wiring and first-run experience after the non-UI foundations landed
+
 ## [0.23.0] — 2026-05-10
 
 ### Added

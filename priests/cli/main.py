@@ -14,7 +14,7 @@ from priests.cli.service_cmd import service_app
 
 app = typer.Typer(
     name="priests",
-    help="AI dispatch CLI and service.",
+    help="CLI-first showcase chat app and HTTP service for priest.",
     no_args_is_help=True,
 )
 

@@ -1,6 +1,8 @@
 """Tests for GET /v1/config and PATCH /v1/config routes."""
 from __future__ import annotations
 
+import tomllib
+from zipfile import ZipFile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -279,3 +281,124 @@ def test_put_model_options_rejects_unknown_provider(client):
     resp = c.put("/v1/config/models/options", json={"options": ["github_copilit/gpt-5-mini"]})
     assert resp.status_code == 422
     assert "Unknown provider" in resp.json()["detail"]
+
+
+def test_provider_status_endpoint_uses_status_helper(client):
+    from priests.provider_status import ProviderStatus
+    from priests.service.routes import config as config_route
+
+    c, _ = client
+
+    async def fake_status(_config, name, timeout=2.0):
+        return ProviderStatus(
+            name=name,
+            label=f"{name} label",
+            provider_type="local" if name == "ollama" else "api",
+            configured=True,
+            reachable=True if name == "ollama" else None,
+            base_url="http://example.test",
+            model_count=1 if name == "ollama" else None,
+            models=["test"],
+            message="ok",
+        )
+
+    with patch.object(config_route, "provider_status_async", fake_status):
+        resp = c.get("/v1/providers/status")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    ollama = next(row for row in body if row["name"] == "ollama")
+    assert ollama["reachable"] is True
+    assert ollama["model_count"] == 1
+
+
+def test_provider_validate_endpoint_uses_validation_helper(client):
+    from priests.provider_status import ModelValidation
+    from priests.service.routes import config as config_route
+
+    c, _ = client
+    with patch.object(
+        config_route,
+        "validate_model",
+        return_value=ModelValidation("ollama", "llama3", True, "ok", "Model is available locally"),
+    ):
+        resp = c.post("/v1/providers/validate", json={"provider": "ollama", "model": "llama3"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "provider": "ollama",
+        "model": "llama3",
+        "valid": True,
+        "status": "ok",
+        "message": "Model is available locally",
+    }
+
+
+def test_config_export_strips_secrets_and_includes_profiles(tmp_path):
+    from priests.cli.config_cmd import config_export
+
+    profiles = tmp_path / "profiles"
+    profile = profiles / "default"
+    profile.mkdir(parents=True)
+    (profile / "PROFILE.md").write_text("# Default\n")
+    config_path = tmp_path / "priests.toml"
+    config_path.write_text(
+        f"""
+[default]
+provider = "ollama"
+model = "llama3"
+profile = "default"
+
+[paths]
+profiles_dir = "{profiles}"
+
+[providers.openai]
+api_key = "sk-secret"
+base_url = "https://api.openai.com/v1"
+""".strip()
+    )
+    archive = tmp_path / "export.zip"
+
+    config_export(output=archive, config_file=config_path)
+
+    with ZipFile(archive) as zf:
+        exported_config = zf.read("config/priests.toml").decode()
+        assert "sk-secret" not in exported_config
+        assert 'api_key = ""' in exported_config
+        assert "profiles/default/PROFILE.md" in zf.namelist()
+
+
+def test_config_import_restores_config_and_profiles(tmp_path):
+    from priests.cli.config_cmd import config_export, config_import
+
+    src_profiles = tmp_path / "src_profiles"
+    src_profile = src_profiles / "coder"
+    src_profile.mkdir(parents=True)
+    (src_profile / "PROFILE.md").write_text("# Coder\n")
+    src_config = tmp_path / "src.toml"
+    src_config.write_text(
+        f"""
+[default]
+provider = "ollama"
+model = "llama3"
+profile = "coder"
+
+[paths]
+profiles_dir = "{src_profiles}"
+""".strip()
+    )
+    archive = tmp_path / "export.zip"
+    config_export(output=archive, config_file=src_config)
+
+    dst_config = tmp_path / "dst.toml"
+    dst_profiles = tmp_path / "dst_profiles"
+    config_import(
+        archive=archive,
+        overwrite=True,
+        profiles_dir=dst_profiles,
+        config_file=dst_config,
+    )
+
+    data = tomllib.loads(dst_config.read_text())
+    assert data["default"]["profile"] == "coder"
+    assert (dst_profiles / "coder" / "PROFILE.md").read_text() == "# Coder\n"

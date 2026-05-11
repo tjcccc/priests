@@ -23,6 +23,7 @@ from priests.cli.init_cmd import (
 )
 from priests.config.loader import is_initialized, load_config, save_config
 from priests.config.model import AppConfig
+from priests.provider_status import validate_model
 from priests.registry import list_providers
 
 model_app = typer.Typer(help="Manage model defaults and provider setup.")
@@ -169,6 +170,36 @@ def model_add(
     console.print(f"\n[green]Model added.[/green]  {provider_name}/{model}")
     console.print(f"[dim]Use with: priests run --provider {provider_name} --model {model}[/dim]")
     console.print(f"[dim]Set as default: priests model default[/dim]")
+
+
+@model_app.command("validate")
+def model_validate(
+    model: Annotated[str | None, typer.Argument(help="Model to validate, e.g. ollama/qwen3:8b. Omit to validate the default.")] = None,
+    config_file: Annotated[Path | None, typer.Option("--config", help="Path to priests.toml.")] = None,
+) -> None:
+    """Validate a provider/model pair against config and reachable local models."""
+    if not is_initialized(config_file):
+        err_console.print("[yellow]Not initialized.[/yellow] Run [bold]priests init[/bold] first.")
+        raise typer.Exit(1)
+
+    config = load_config(config_file)
+    if model is None:
+        if not config.default.provider or not config.default.model:
+            err_console.print("[red]No default model is configured.[/red]")
+            raise typer.Exit(1)
+        provider_name = config.default.provider
+        model_name = config.default.model
+    else:
+        if "/" not in model:
+            err_console.print("[red]Invalid model format.[/red] Use provider/model, e.g. ollama/qwen3:8b")
+            raise typer.Exit(1)
+        provider_name, model_name = model.split("/", 1)
+
+    result = validate_model(config, provider_name, model_name)
+    style = "green" if result.status == "ok" else "yellow" if result.status == "warning" else "red"
+    console.print(f"[{style}]{result.status.upper()}[/{style}] {provider_name}/{model_name}: {result.message}")
+    if not result.valid:
+        raise typer.Exit(1)
 
 
 def _run_add_flow(config, config_file) -> tuple[str, str]:
