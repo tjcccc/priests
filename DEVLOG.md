@@ -1,5 +1,12 @@
 # DEVLOG
 
+## 2026-05-12 — v0.26.2 — chat routing fixes
+
+- Web UI streaming responses are now bound to the profile/session that started the request, so switching profiles while a model is responding no longer renders that response in the newly selected chat
+- Added a regression check that profile `RULES.md` content is included in the provider system message
+
+---
+
 ## 2026-05-11 — v0.26.1 — web search reliability
 
 - Web UI and HTTP service chats now honor enabled web search by running model-emitted `<search_query>` requests and re-asking with the search results

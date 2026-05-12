@@ -50,6 +50,11 @@ interface AttachedImage {
   preview: string      // data URL — shown immediately before upload completes
 }
 
+interface ConversationTarget {
+  profile: string
+  sessionId: string
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -84,6 +89,10 @@ function renderMd(text: string): string {
 // across different ISO format variations (Z vs +00:00, microseconds, etc.)
 function tsMs(iso: string): number {
   return new Date(iso).getTime()
+}
+
+function sameTarget(a: ConversationTarget | null, b: ConversationTarget | null): boolean {
+  return Boolean(a && b && a.profile === b.profile && a.sessionId === b.sessionId)
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +225,7 @@ export default function App() {
   const [thinking, setThinking] = useState(false)
   const [streaming, setStreaming] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
+  const [activeStreamTarget, setActiveStreamTarget] = useState<ConversationTarget | null>(null)
   const [chatError, setChatError] = useState<string | null>(null)
   const [slowResponse, setSlowResponse] = useState(false)
 
@@ -233,6 +243,8 @@ export default function App() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const titleInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const currentTargetRef = useRef<ConversationTarget>({ profile: selectedProfile, sessionId: pendingSessionId })
+  const sessionLoadSeqRef = useRef(0)
 
   // ---------------------------------------------------------------------------
   // Derived values
@@ -269,6 +281,11 @@ export default function App() {
 
   const hasUploadingImages = attachedImages.some(img => img.uuid === null)
   const hasConfiguredModel = Boolean(activeProvider && activeModel)
+  const currentTarget: ConversationTarget = {
+    profile: selectedProfile,
+    sessionId: selectedSession?.id ?? pendingSessionId,
+  }
+  const isViewingActiveStream = streaming && sameTarget(activeStreamTarget, currentTarget)
 
   const openConfig = () => {
     const returnTo = selectedSession ? `/ui/session/${selectedSession.id}` : '/ui'
@@ -338,19 +355,24 @@ export default function App() {
   }, [messages, streamingContent])
 
   useEffect(() => {
-    if (!streaming || streamingContent) {
+    currentTargetRef.current = currentTarget
+  }, [currentTarget.profile, currentTarget.sessionId])
+
+  useEffect(() => {
+    if (!isViewingActiveStream || streamingContent) {
       setSlowResponse(false)
       return
     }
     const timer = window.setTimeout(() => setSlowResponse(true), 8000)
     return () => window.clearTimeout(timer)
-  }, [streaming, streamingContent])
+  }, [isViewingActiveStream, streamingContent])
 
   // ---------------------------------------------------------------------------
   // Session actions
   // ---------------------------------------------------------------------------
 
   const selectSession = async (session: SessionSummary) => {
+    const seq = ++sessionLoadSeqRef.current
     setSelectedProfile(session.profile_name)
     setSelectedSession(session)
     setAttachedImages([])
@@ -371,6 +393,7 @@ export default function App() {
         }
       }
 
+      if (seq !== sessionLoadSeqRef.current) return
       setMessages(detail.turns.map(t => ({
         role: t.role as 'user' | 'assistant',
         content: t.content,
@@ -442,6 +465,7 @@ export default function App() {
   }
 
   const newSession = (profile: string) => {
+    sessionLoadSeqRef.current += 1
     setSelectedProfile(profile)
     setSelectedSession(null)
     setMessages([])
@@ -577,6 +601,8 @@ export default function App() {
     }])
     setStreaming(true)
     setStreamingContent('')
+    const requestTarget: ConversationTarget = { profile: selectedProfile, sessionId }
+    setActiveStreamTarget(requestTarget)
 
     const t0 = Date.now()
     let accumulated = ''
@@ -593,20 +619,25 @@ export default function App() {
       },
       delta => {
         accumulated += delta
-        setStreamingContent(accumulated)
+        if (sameTarget(currentTargetRef.current, requestTarget)) {
+          setStreamingContent(accumulated)
+        }
       },
       (meta: StreamMeta) => {
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: accumulated,
-          timestamp: new Date().toISOString(),
-          model: meta.model,
-          elapsed_ms: meta.elapsed_ms ?? Date.now() - t0,
-        }])
-        setStreamingContent('')
+        if (sameTarget(currentTargetRef.current, requestTarget)) {
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: accumulated,
+            timestamp: new Date().toISOString(),
+            model: meta.model,
+            elapsed_ms: meta.elapsed_ms ?? Date.now() - t0,
+          }])
+          setStreamingContent('')
+        }
         setStreaming(false)
+        setActiveStreamTarget(null)
         loadSessions().then(sessions => {
-          if (isNew) {
+          if (isNew && sameTarget(currentTargetRef.current, requestTarget)) {
             const found = sessions.find(s => s.id === sessionId)
             if (found) {
               setSelectedSession(found)
@@ -616,15 +647,18 @@ export default function App() {
         })
       },
       err => {
-        setChatError(err)
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: `*Error: ${err}*`,
-          timestamp: new Date().toISOString(),
-          elapsed_ms: Date.now() - t0,
-        }])
-        setStreamingContent('')
+        if (sameTarget(currentTargetRef.current, requestTarget)) {
+          setChatError(err)
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: `*Error: ${err}*`,
+            timestamp: new Date().toISOString(),
+            elapsed_ms: Date.now() - t0,
+          }])
+          setStreamingContent('')
+        }
         setStreaming(false)
+        setActiveStreamTarget(null)
       },
     )
   }
@@ -829,7 +863,7 @@ export default function App() {
             ))}
 
             {/* Streaming bubble */}
-            {streaming && (
+            {isViewingActiveStream && (
               <div>
                 <div className="bg-black/[0.04] rounded-[18px] px-5 py-4 w-fit max-w-[720px]">
                   {streamingContent ? (

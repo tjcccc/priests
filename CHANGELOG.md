@@ -2,6 +2,14 @@
 
 All notable changes to `priests` are documented here.
 
+## [0.26.2] — 2026-05-12
+
+### Fixed
+- Web UI streaming responses are now bound to the profile/session that started the request, so switching profiles while a response is pending no longer renders it in the newly selected chat
+
+### Tests
+- Added coverage proving profile `RULES.md` content is included in the provider system message
+
 ## [0.26.0] — 2026-05-11
 
 ### Added
